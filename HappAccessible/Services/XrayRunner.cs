@@ -1,0 +1,263 @@
+using System.Diagnostics;
+using System.IO;
+using System.IO.Compression;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using HappAccessible.Models;
+
+namespace HappAccessible.Services;
+
+public sealed class XrayRunner : IDisposable
+{
+    private static readonly HttpClient Http = CreateHttp();
+
+    private static HttpClient CreateHttp()
+    {
+        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/0.3");
+        return http;
+    }
+
+    private Process? _process;
+    private readonly StringBuilder _log = new();
+    private readonly string _toolsDir;
+    private readonly string _dataDir;
+    private int _activePort = EngineOptions.DefaultMixedPort;
+
+    public XrayRunner()
+    {
+        var root = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HappAccessible");
+        _toolsDir = Path.Combine(root, "tools", "xray");
+        _dataDir = Path.Combine(root, "data");
+        Directory.CreateDirectory(_toolsDir);
+        Directory.CreateDirectory(_dataDir);
+    }
+
+    public string ExePath => Path.Combine(_toolsDir, "xray.exe");
+    public string ConfigPath => Path.Combine(_dataDir, "xray-config.json");
+    public string? CoreVersion { get; private set; }
+    public int ActivePort => _activePort;
+    public bool IsRunning => _process is { HasExited: false };
+
+    public string RecentLog
+    {
+        get
+        {
+            lock (_log)
+            {
+                var s = _log.ToString();
+                return s.Length <= 800 ? s : s[^800..];
+            }
+        }
+    }
+
+    public async Task EnsureBinaryAsync(bool forceUpdate = false, string? downloadUrl = null,
+        string? expectedVersion = null, IProgress<string>? progress = null, CancellationToken ct = default)
+    {
+        if (File.Exists(ExePath) && !forceUpdate)
+        {
+            await TryReadVersionAsync(ct).ConfigureAwait(false);
+            return;
+        }
+
+        progress?.Report(forceUpdate ? "Обновляю Xray…" : "Скачиваю Xray…");
+        string zipUrl;
+        string? tag = expectedVersion;
+        if (!string.IsNullOrEmpty(downloadUrl))
+        {
+            zipUrl = downloadUrl;
+        }
+        else
+        {
+            using var releaseResponse = await Http.GetAsync(
+                "https://api.github.com/repos/XTLS/Xray-core/releases/latest", ct).ConfigureAwait(false);
+            releaseResponse.EnsureSuccessStatusCode();
+            await using var stream = await releaseResponse.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+            using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+            tag = doc.RootElement.GetProperty("tag_name").GetString();
+            zipUrl = null!;
+            foreach (var asset in doc.RootElement.GetProperty("assets").EnumerateArray())
+            {
+                var name = asset.GetProperty("name").GetString() ?? "";
+                if (name.Equals("Xray-windows-64.zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    zipUrl = asset.GetProperty("browser_download_url").GetString()!;
+                    break;
+                }
+            }
+
+            if (string.IsNullOrEmpty(zipUrl))
+                throw new InvalidOperationException("Не найден Xray-windows-64.zip в релизе.");
+        }
+
+        var zipPath = Path.Combine(_toolsDir, "xray.zip");
+        if (_process is { HasExited: false })
+            await StopAsync().ConfigureAwait(false);
+
+        await using (var fs = File.Create(zipPath))
+        {
+            using var download = await Http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, ct)
+                .ConfigureAwait(false);
+            download.EnsureSuccessStatusCode();
+            await download.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
+        }
+
+        progress?.Report("Распаковываю Xray…");
+        var extract = Path.Combine(_toolsDir, "_extract");
+        if (Directory.Exists(extract))
+            Directory.Delete(extract, recursive: true);
+        ZipFile.ExtractToDirectory(zipPath, extract, overwriteFiles: true);
+        File.Delete(zipPath);
+
+        var found = Directory.GetFiles(extract, "xray.exe", SearchOption.AllDirectories).FirstOrDefault()
+                    ?? throw new FileNotFoundException("xray.exe не найден в архиве.");
+        File.Copy(found, ExePath, overwrite: true);
+        foreach (var dat in new[] { "geoip.dat", "geosite.dat" })
+        {
+            var src = Directory.GetFiles(extract, dat, SearchOption.AllDirectories).FirstOrDefault();
+            if (src is not null)
+                File.Copy(src, Path.Combine(_toolsDir, dat), overwrite: true);
+        }
+
+        try { Directory.Delete(extract, recursive: true); } catch { /* ignore */ }
+
+        await TryReadVersionAsync(ct).ConfigureAwait(false);
+        var state = CoreVersionsState.Load();
+        state.Xray = CoreUpdateService.NormalizeTag(tag) ?? CoreUpdateService.NormalizeTag(CoreVersion);
+        state.Save();
+    }
+
+    private async Task TryReadVersionAsync(CancellationToken ct)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo
+            {
+                FileName = ExePath,
+                Arguments = "version",
+                WorkingDirectory = _toolsDir,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true
+            };
+            using var p = Process.Start(psi);
+            if (p is null) return;
+            var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
+            await p.WaitForExitAsync(ct).ConfigureAwait(false);
+            // "Xray 26.7.28 (Xray, Penetrates Everything.) ..."
+            var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault() ?? "";
+            var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2)
+                CoreVersion = parts[1];
+            else
+                CoreVersion = line;
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    public async Task StartAsync(ServerProfile server, EngineOptions? engine = null, CancellationToken ct = default)
+    {
+        await StopAsync().ConfigureAwait(false);
+        await EnsureBinaryAsync(ct: ct).ConfigureAwait(false);
+
+        engine ??= new EngineOptions();
+        _activePort = EngineOptions.ClampPort(engine.MixedPort);
+
+        lock (_log) _log.Clear();
+        var json = XrayConfigBuilder.Build(server, _activePort);
+        await File.WriteAllTextAsync(ConfigPath, json, ct).ConfigureAwait(false);
+
+        var psi = new ProcessStartInfo
+        {
+            FileName = ExePath,
+            Arguments = $"run -c \"{ConfigPath}\"",
+            WorkingDirectory = _toolsDir,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
+        _process.OutputDataReceived += (_, e) => AppendLog(e.Data);
+        _process.ErrorDataReceived += (_, e) => AppendLog(e.Data);
+
+        if (!_process.Start())
+            throw new InvalidOperationException("Не удалось запустить Xray.");
+
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
+
+        await Task.Delay(900, ct).ConfigureAwait(false);
+        if (_process.HasExited)
+            throw new InvalidOperationException($"Xray сразу завершился (код {_process.ExitCode}). {RecentLog}");
+    }
+
+    public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default)
+    {
+        try
+        {
+            var handler = new HttpClientHandler
+            {
+                Proxy = new WebProxy($"http://127.0.0.1:{_activePort}"),
+                UseProxy = true,
+                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+            };
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+            using var resp = await client.GetAsync("http://www.gstatic.com/generate_204", ct)
+                .ConfigureAwait(false);
+            return (int)resp.StatusCode is 204 or 200 or 301 or 302;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public async Task StopAsync()
+    {
+        if (_process is null)
+            return;
+        try
+        {
+            if (!_process.HasExited)
+            {
+                _process.Kill(entireProcessTree: true);
+                await _process.WaitForExitAsync().ConfigureAwait(false);
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+        finally
+        {
+            _process.Dispose();
+            _process = null;
+        }
+    }
+
+    private void AppendLog(string? line)
+    {
+        if (string.IsNullOrEmpty(line))
+            return;
+        lock (_log)
+        {
+            _log.AppendLine(line);
+            if (_log.Length > 20_000)
+                _log.Remove(0, _log.Length - 10_000);
+        }
+    }
+
+    public void Dispose() => StopAsync().GetAwaiter().GetResult();
+}

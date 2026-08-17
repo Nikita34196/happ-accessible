@@ -1,0 +1,38 @@
+<Window x:Class="HappAccessible.SubscriptionEditorWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Подписка"
+        Height="320" Width="640"
+        MinHeight="260" MinWidth="480"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        AutomationProperties.Name="Редактирование подписки">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Bottom" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="ApplyButton"
+                    Content="Применить (_A)"
+                    MinWidth="120" MinHeight="32" Margin="0,0,8,0"
+                    IsDefault="True"
+                    Click="ApplyButton_OnClick"
+                    AutomationProperties.Name="Применить подписку" />
+            <Button Content="Отмена (_C)"
+                    MinWidth="110" MinHeight="32"
+                    IsCancel="True"
+                    Click="CancelButton_OnClick"
+                    AutomationProperties.Name="Отмена" />
+        </StackPanel>
+
+        <StackPanel>
+            <Label Content="Ссылка подписки, список серверов или текст AmneziaWG .conf"
+                   Target="{Binding ElementName=SubscriptionBox}"
+                   AutomationProperties.Name="Подпись поля подписки" />
+            <TextBox x:Name="SubscriptionBox"
+                     Height="160"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="Поле подписки"
+                     AutomationProperties.HelpText="Вставьте https-ссылку, список vless/… или текст AmneziaWG .conf" />
+        </StackPanel>
+    </DockPanel>
+</Window>

@@ -1,0 +1,40 @@
+# Build Happ Accessible on every push/PR (Windows, .NET 8).
+name: Build
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore HappAccessible.sln
+
+      - name: Build
+        run: dotnet build HappAccessible.sln -c Release --no-restore
+
+      - name: Publish win-x64 (self-contained)
+        run: >
+          dotnet publish HappAccessible/HappAccessible.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishReadyToRun=true
+          -p:DebugType=None -p:DebugSymbols=false
+          -o publish/app
+
+      - name: Upload publish folder
+        uses: actions/upload-artifact@v4
+        with:
+          name: HappAccessible-win-x64
+          path: publish/app
+          if-no-files-found: error

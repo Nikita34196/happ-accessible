@@ -1,0 +1,239 @@
+﻿<Window x:Class="HappAccessible.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Happ Accessible"
+        Height="720" Width="800"
+        MinHeight="540" MinWidth="600"
+        WindowStartupLocation="CenterScreen"
+        AutomationProperties.Name="Happ Accessible — доступный прокси-клиент"
+        StateChanged="MainWindow_OnStateChanged"
+        Closing="MainWindow_OnClosing"
+        PreviewKeyDown="MainWindow_OnPreviewKeyDown">
+    <DockPanel>
+        <Menu DockPanel.Dock="Top" AutomationProperties.Name="Главное меню">
+            <MenuItem Header="_Подписка" AutomationProperties.Name="Меню подписки">
+                <MenuItem Header="_Изменить ссылку…" Click="MenuEditSubscription_OnClick"
+                          AutomationProperties.Name="Изменить ссылку подписки" />
+                <MenuItem Header="Импорт из _буфера обмена" Click="MenuImportClipboard_OnClick"
+                          AutomationProperties.Name="Импорт подписки из буфера обмена" />
+                <MenuItem Header="Импорт из _файла…" Click="MenuImportSubscriptionFile_OnClick"
+                          AutomationProperties.Name="Импорт подписки из файла" />
+                <MenuItem Header="_Обновить подписку" Click="MenuRefreshSubscription_OnClick"
+                          InputGestureText="F5"
+                          AutomationProperties.Name="Обновить подписку" />
+                <Separator />
+                <MenuItem Header="AmneziaWG: импорт из ф_айла…" Click="MenuImportAwgFile_OnClick"
+                          AutomationProperties.Name="Импорт AmneziaWG из файла" />
+                <MenuItem Header="AmneziaWG: импорт из б_уфера" Click="MenuImportAwgClipboard_OnClick"
+                          AutomationProperties.Name="Импорт AmneziaWG из буфера обмена" />
+            </MenuItem>
+            <MenuItem Header="_Справка" AutomationProperties.Name="Справка">
+                <MenuItem Header="Проверить _обновления ядер" Click="MenuCheckCoreUpdates_OnClick"
+                          AutomationProperties.Name="Проверить обновления ядер" />
+                <MenuItem Header="_О программе" Click="MenuAbout_OnClick"
+                          AutomationProperties.Name="О программе" />
+            </MenuItem>
+        </Menu>
+
+        <TextBlock x:Name="StatusText"
+                   DockPanel.Dock="Bottom"
+                   Margin="12,0,12,12"
+                   TextWrapping="Wrap"
+                   Focusable="True"
+                   AutomationProperties.LiveSetting="Assertive"
+                   AutomationProperties.Name="Статус"
+                   Text="Готово. Alt — меню «Подписка»." />
+
+        <StackPanel Margin="12,8,12,0">
+            <TextBlock x:Name="SubscriptionInfoText"
+                       TextWrapping="Wrap"
+                       Margin="0,0,0,8"
+                       AutomationProperties.Name="Сведения о подписке"
+                       Text="Подписка не задана. Alt, затем П — меню подписки." />
+
+            <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                <Button x:Name="PingButton"
+                        Content="Пинг (_G)"
+                        MinWidth="100" MinHeight="32" Margin="0,0,8,0"
+                        Click="PingButton_OnClick"
+                        AutomationProperties.Name="Пинг всех серверов" />
+                <Button x:Name="CheckWhitelistButton"
+                        Content="Проверить БС (_B)"
+                        MinWidth="130" MinHeight="32" Margin="0,0,8,0"
+                        Click="CheckWhitelistButton_OnClick"
+                        AutomationProperties.Name="Проверить серверы обхода белых списков"
+                        AutomationProperties.HelpText="Показывает, есть ли в подписке серверы для обхода белых списков провайдера" />
+                <Button x:Name="ConnectButton"
+                        Content="Подключить (Ctrl+Shift+C)"
+                        MinWidth="200" MinHeight="32" Margin="0,0,8,0"
+                        Click="ConnectButton_OnClick"
+                        AutomationProperties.Name="Подключить выбранный сервер"
+                        AutomationProperties.HelpText="Горячая клавиша Ctrl+Shift+C" />
+                <Button x:Name="DisconnectButton"
+                        Content="Отключить (Ctrl+Shift+D)"
+                        MinWidth="200" MinHeight="32" Margin="0,0,8,0"
+                        Click="DisconnectButton_OnClick"
+                        AutomationProperties.Name="Отключить прокси"
+                        AutomationProperties.HelpText="Горячая клавиша Ctrl+Shift+D" />
+                <Button x:Name="SaveButton"
+                        Content="Сохранить (_S)"
+                        MinWidth="110" MinHeight="32"
+                        Click="SaveButton_OnClick"
+                        AutomationProperties.Name="Сохранить настройки" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                <CheckBox x:Name="SystemProxyCheck"
+                          Content="Системный прокси (_P)"
+                          IsChecked="True"
+                          Margin="0,0,16,0"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Включить системный прокси Windows" />
+                <CheckBox x:Name="TunCheck"
+                          Content="TUN (_T)"
+                          Margin="0,0,16,0"
+                          Checked="TunCheck_Changed"
+                          Unchecked="TunCheck_Changed"
+                          AutomationProperties.Name="Включить режим TUN"
+                          AutomationProperties.HelpText="При включении приложение перезапустится от имени администратора." />
+                <Label Content="TUN stack:"
+                       Target="{Binding ElementName=TunStackBox}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,4,0"
+                       AutomationProperties.Name="Подпись TUN stack" />
+                <ComboBox x:Name="TunStackBox"
+                          MinWidth="110" MinHeight="28"
+                          SelectionChanged="SettingsControl_Changed"
+                          AutomationProperties.Name="Стек TUN"
+                          AutomationProperties.HelpText="gvisor обычно стабильнее на Windows; mixed — запасной вариант">
+                    <ComboBoxItem Tag="gvisor" Content="gvisor" IsSelected="True" />
+                    <ComboBoxItem Tag="mixed" Content="mixed" />
+                    <ComboBoxItem Tag="system" Content="system" />
+                </ComboBox>
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <Label Content="Mixed порт:"
+                       Target="{Binding ElementName=MixedPortBox}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,4,0"
+                       AutomationProperties.Name="Подпись mixed порта" />
+                <TextBox x:Name="MixedPortBox"
+                         Width="80" MinHeight="28"
+                         Text="2080"
+                         VerticalContentAlignment="Center"
+                         Margin="0,0,16,0"
+                         LostFocus="SettingsControl_Changed"
+                         AutomationProperties.Name="Порт локального mixed-прокси"
+                         AutomationProperties.HelpText="По умолчанию 2080; в Vireo часто 10808. Диапазон 1024–65535" />
+                <Label Content="Ядро:"
+                       Target="{Binding ElementName=ProxyCoreBox}"
+                       VerticalAlignment="Center"
+                       Margin="0,0,4,0"
+                       AutomationProperties.Name="Подпись ядра прокси" />
+                <ComboBox x:Name="ProxyCoreBox"
+                          MinWidth="120" MinHeight="28" Margin="0,0,16,0"
+                          SelectionChanged="SettingsControl_Changed"
+                          AutomationProperties.Name="Ядро прокси"
+                          AutomationProperties.HelpText="auto: Reality/Vision через Xray без TUN; иначе sing-box. TUN и маршруты — всегда sing-box.">
+                    <ComboBoxItem Tag="auto" Content="auto" IsSelected="True" />
+                    <ComboBoxItem Tag="sing-box" Content="sing-box" />
+                    <ComboBoxItem Tag="xray" Content="Xray" />
+                </ComboBox>
+                <CheckBox x:Name="AutoUpdateCoresCheck"
+                          Content="Автообновление ядер (_K)"
+                          IsChecked="True"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Автообновление ядер sing-box, Xray и AmneziaWG"
+                          AutomationProperties.HelpText="При старте сверяет GitHub releases и скачивает новые версии, если не подключены" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <CheckBox x:Name="AutoConnectCheck"
+                          Content="Автоподключение при запуске (_A)"
+                          Margin="0,0,16,0"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Автоподключение при запуске" />
+                <CheckBox x:Name="StartMinimizedCheck"
+                          Content="Сворачивать в трей (_M)"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Сворачивать в трей вместо закрытия" />
+            </StackPanel>
+
+            <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                <CheckBox x:Name="AutoUpdateSubCheck"
+                          Content="Автообновление подписки каждые 6 ч (_U)"
+                          IsChecked="True"
+                          Margin="0,0,16,0"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Автообновление подписки" />
+                <CheckBox x:Name="AutoWhitelistCheck"
+                          Content="Автопереключение на обход белых списков (_W)"
+                          IsChecked="True"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Автопереключение на серверы обхода белых списков" />
+            </StackPanel>
+
+            <Label Content="Режим маршрутизации"
+                   Target="{Binding ElementName=RoutingModeBox}"
+                   Margin="0,10,0,0"
+                   AutomationProperties.Name="Подпись режима маршрутизации" />
+            <ComboBox x:Name="RoutingModeBox"
+                      MinHeight="32"
+                      SelectionChanged="RoutingModeBox_OnSelectionChanged"
+                      AutomationProperties.Name="Режим маршрутизации"
+                      AutomationProperties.HelpText="Режимы по приложениям работают только с TUN.">
+                <ComboBoxItem Tag="global" Content="Всё через VPN (кроме локальной сети)" IsSelected="True" />
+                <ComboBoxItem Tag="bypass-ru" Content="Всё через VPN, кроме сайтов и IP России" />
+                <ComboBoxItem Tag="proxy-list" Content="Только сайты из списка через VPN" />
+                <ComboBoxItem Tag="bypass-list" Content="Всё через VPN, кроме сайтов из списка" />
+                <ComboBoxItem Tag="app-proxy" Content="Только выбранные приложения через VPN (нужен TUN)" />
+                <ComboBoxItem Tag="app-bypass" Content="Всё через VPN, кроме выбранных приложений (нужен TUN)" />
+            </ComboBox>
+
+            <Label x:Name="DomainListLabel"
+                   Content="Список сайтов (по одному в строке), например youtube.com"
+                   Target="{Binding ElementName=DomainListBox}"
+                   Margin="0,8,0,0"
+                   AutomationProperties.Name="Подпись списка сайтов" />
+            <TextBox x:Name="DomainListBox"
+                     Height="56"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="Список сайтов для режима маршрутизации"
+                     LostFocus="SettingsControl_Changed" />
+
+            <Label x:Name="AppListLabel"
+                   Content="Приложения (по одному в строке), например chrome.exe"
+                   Target="{Binding ElementName=AppListBox}"
+                   Margin="0,8,0,0"
+                   AutomationProperties.Name="Подпись списка приложений" />
+            <TextBox x:Name="AppListBox"
+                     Height="56"
+                     TextWrapping="Wrap"
+                     AcceptsReturn="True"
+                     VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="Список приложений для режима по приложениям"
+                     AutomationProperties.HelpText="Имя процесса: chrome.exe или firefox.exe — по одному в строке"
+                     LostFocus="SettingsControl_Changed" />
+
+            <Label Content="Серверы"
+                   Target="{Binding ElementName=ServerList}"
+                   Margin="0,12,0,0" />
+            <ListBox x:Name="ServerList"
+                     Height="200"
+                     DisplayMemberPath="DisplayName"
+                     AutomationProperties.Name="Список серверов"
+                     AutomationProperties.HelpText="Стрелки — выбор, Enter или Ctrl+Shift+C — подключить"
+                     KeyDown="ServerList_OnKeyDown"
+                     SelectionChanged="ServerList_OnSelectionChanged" />
+        </StackPanel>
+    </DockPanel>
+</Window>

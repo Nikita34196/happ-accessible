@@ -1,0 +1,100 @@
+# Build portable zip (+ Inno Setup installer) and publish a GitHub Release on version tags.
+# Tag format: v0.3.6  (must match Version in HappAccessible.csproj / installer/*.iss)
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version without v prefix (e.g. 0.3.6). Used only for workflow_dispatch."
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ("${{ github.ref_type }}" -eq "tag") {
+            $v = "${{ github.ref_name }}".TrimStart("v")
+          } elseif ("${{ inputs.version }}".Trim()) {
+            $v = "${{ inputs.version }}".Trim().TrimStart("v")
+          } else {
+            $proj = Get-Content HappAccessible/HappAccessible.csproj -Raw
+            if ($proj -notmatch '<Version>([^<]+)</Version>') { throw "No Version in csproj" }
+            $v = $Matches[1]
+          }
+          Write-Host "VERSION=$v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "tag=v$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Publish win-x64 (self-contained)
+        run: >
+          dotnet publish HappAccessible/HappAccessible.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishReadyToRun=true
+          -p:DebugType=None -p:DebugSymbols=false
+          -o publish/app
+
+      - name: Pack portable zip
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $zip = "dist/HappAccessible-Portable-$v.zip"
+          if (Test-Path $zip) { Remove-Item $zip -Force }
+          Compress-Archive -Path publish/app/* -DestinationPath $zip -CompressionLevel Optimal
+          Get-Item $zip | Format-List Name, Length
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          winget install --id JRSoftware.InnoSetup -e --accept-source-agreements --accept-package-agreements --disable-interactivity
+          $iscc = @(
+            "${env:LOCALAPPDATA}\Programs\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "${env:ProgramFiles}\Inno Setup 6\ISCC.exe"
+          ) | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { throw "ISCC.exe not found after install" }
+          "ISCC=$iscc" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Using $iscc"
+
+      - name: Sync installer version & compile
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $iss = "installer/HappAccessible.iss"
+          (Get-Content $iss -Raw) -replace '#define MyAppVersion "[^"]+"', "#define MyAppVersion `"$v`"" |
+            Set-Content $iss -NoNewline -Encoding utf8
+          & $env:ISCC $iss
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
+          $setup = "dist/HappAccessible-Setup-$v.exe"
+          if (-not (Test-Path $setup)) { throw "Missing $setup" }
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.tag }}
+          name: Happ Accessible ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            dist/HappAccessible-Portable-${{ steps.ver.outputs.version }}.zip
+            dist/HappAccessible-Setup-${{ steps.ver.outputs.version }}.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

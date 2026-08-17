@@ -1,0 +1,29 @@
+# Ignore build outputs and local artifacts
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+HappAccessible/bin/
+HappAccessible/obj/
+
+publish/
+publish-*/
+dist/
+
+# Local cores / caches (downloaded at runtime)
+**/tools/
+**/core-versions.json
+
+*.msi
+*.zip
+*.exe
+!installer/**
+
+# OS junk
+Thumbs.db
+Desktop.ini
+.DS_Store

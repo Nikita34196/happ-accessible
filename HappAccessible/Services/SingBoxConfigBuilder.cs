@@ -56,6 +56,19 @@ public static class SingBoxConfigBuilder
                 ["protocol"] = "dns",
                 ["action"] = "hijack-dns"
             },
+            // QUIC (UDP/443) через VLESS+xhttp часто зависает — Google/YouTube в Chrome
+            // не открываются, пока браузер не упадёт на TCP HTTPS. Telegram на TCP ок.
+            new Dictionary<string, object?>
+            {
+                ["protocol"] = "quic",
+                ["action"] = "reject"
+            },
+            new Dictionary<string, object?>
+            {
+                ["network"] = "udp",
+                ["port"] = 443,
+                ["action"] = "reject"
+            },
             new Dictionary<string, object?>
             {
                 ["ip_is_private"] = true,
@@ -214,7 +227,8 @@ public static class SingBoxConfigBuilder
                 }
             },
             ["final"] = dnsFinal,
-            ["strategy"] = "prefer_ipv4"
+            // Google/YouTube часто ломаются на кривом IPv6 через TUN — только IPv4
+            ["strategy"] = "ipv4_only"
         };
         if (dnsRulesList.Count > 0)
             dns["rules"] = dnsRulesList;
@@ -446,12 +460,15 @@ public static class SingBoxConfigBuilder
             ["tag"] = "proxy",
             ["server"] = u.IdnHost,
             ["server_port"] = port,
-            ["uuid"] = uuid,
-            ["packet_encoding"] = "xudp"
+            ["uuid"] = uuid
         };
         // Vision flow is only valid on raw TCP
         if (!string.IsNullOrEmpty(flow) && type is "tcp" or "raw" or "")
             outbound["flow"] = flow;
+        // xudp over xhttp is unreliable for browser QUIC — omit there
+        if (type is not ("xhttp" or "splithttp"))
+            outbound["packet_encoding"] = "xudp";
+
 
         if (security is "tls" or "reality")
         {
@@ -465,6 +482,14 @@ public static class SingBoxConfigBuilder
                     ["fingerprint"] = fp
                 }
             };
+
+            var alpnRaw = Q(q, "alpn");
+            if (!string.IsNullOrWhiteSpace(alpnRaw))
+            {
+                var alpns = alpnRaw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (alpns.Length > 0)
+                    tls["alpn"] = alpns;
+            }
 
             if (security == "reality")
             {

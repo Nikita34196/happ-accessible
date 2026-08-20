@@ -8,10 +8,9 @@ namespace HappAccessible.Services;
 /// </summary>
 public static class RemnawaveAdminGate
 {
-    // SHA-256 hex of UTF-8 bytes: "happ-rw|" + PIN
-    // Current PIN is temporary until operators set their own — do not document in README.
+    // SHA-256 hex of UTF-8 bytes: "happ-rw|" + PIN — do not document in README.
     private const string ExpectedPinHashHex =
-        "7142EF3AFE0C94C29889800A7FEB3E52E62DE356F7B481485409E48CEA1D4163";
+        "9B5E4D3687450229A0A44E700023037915FCB4335FF79272DF4683B53765FB62";
 
     public static bool VerifyPin(string? pin)
     {

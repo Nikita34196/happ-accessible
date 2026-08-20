@@ -36,6 +36,7 @@ public partial class MainWindow : Window
     private bool _healthTickRunning;
     private bool _subUpdateTickRunning;
     private int _sessionEpoch; // bumped on Disconnect to cancel in-flight failover/connect follow-ups
+    private bool _remnawaveAdminUnlockedThisSession;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public MainWindow()
@@ -615,17 +616,93 @@ public partial class MainWindow : Window
         {
             e.Handled = true;
             _ = ConnectToggleAsync();
+            return;
+        }
+
+        // Hidden operator entry: not shown in menus for regular users.
+        if (e.Key == Key.R)
+        {
+            e.Handled = true;
+            _ = OpenRemnawaveAdminIfUnlockedAsync();
         }
     }
 
     private async void MenuEditSubscription_OnClick(object sender, RoutedEventArgs e) =>
         await EditSubscriptionAsync();
 
-    private async void MenuRemnawaveAdmin_OnClick(object sender, RoutedEventArgs e)
+    private async Task OpenRemnawaveAdminIfUnlockedAsync()
     {
+        if (!_remnawaveAdminUnlockedThisSession)
+        {
+            var pin = PromptPassword(
+                "Доступ оператора",
+                "Введите PIN управления панелью (только для операторов):");
+            if (pin is null)
+                return;
+            if (!RemnawaveAdminGate.VerifyPin(pin))
+            {
+                SetStatus("Неверный PIN. Управление панелью недоступно.");
+                return;
+            }
+
+            _remnawaveAdminUnlockedThisSession = true;
+        }
+
         var dlg = new RemnawaveAdminWindow(_settings) { Owner = this };
         if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.AppliedSubscriptionUrl))
             await ApplyImportedTextAsync(dlg.AppliedSubscriptionUrl, sourceLabel: "панели Remnawave");
+    }
+
+    private string? PromptPassword(string title, string label)
+    {
+        var box = new System.Windows.Controls.PasswordBox
+        {
+            MinWidth = 320,
+            MinHeight = 28,
+            Margin = new Thickness(0, 8, 0, 12)
+        };
+        AutomationProperties.SetName(box, "PIN управления панелью");
+        var ok = new System.Windows.Controls.Button
+        {
+            Content = "OK",
+            MinWidth = 90,
+            MinHeight = 28,
+            Margin = new Thickness(0, 0, 8, 0),
+            IsDefault = true
+        };
+        var cancel = new System.Windows.Controls.Button
+        {
+            Content = "Отмена",
+            MinWidth = 90,
+            MinHeight = 28,
+            IsCancel = true
+        };
+        var buttons = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+        };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(box);
+        panel.Children.Add(buttons);
+        var dlg = new Window
+        {
+            Title = title,
+            Content = panel,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = this,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false
+        };
+        string? result = null;
+        ok.Click += (_, _) => { result = box.Password; dlg.DialogResult = true; };
+        cancel.Click += (_, _) => { dlg.DialogResult = false; };
+        box.Focus();
+        return dlg.ShowDialog() == true ? result : null;
     }
 
     private async void MenuRefreshSubscription_OnClick(object sender, RoutedEventArgs e) =>

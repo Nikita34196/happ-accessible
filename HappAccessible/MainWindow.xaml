@@ -34,6 +34,9 @@
                           AutomationProperties.Name="Проверить обновления ядер" />
                 <MenuItem Header="Проверить обновление _приложения" Click="MenuCheckAppUpdate_OnClick"
                           AutomationProperties.Name="Проверить обновление приложения через GitHub" />
+                <MenuItem Header="Открыть _логи…" Click="MenuOpenLogs_OnClick"
+                          AutomationProperties.Name="Открыть файл логов ошибок"
+                          AutomationProperties.HelpText="Ошибки и события обновления ядер пишутся в app.log" />
                 <MenuItem Header="_О программе" Click="MenuAbout_OnClick"
                           AutomationProperties.Name="О программе" />
             </MenuItem>
@@ -80,9 +83,15 @@
                         AutomationProperties.HelpText="Одна кнопка: подключить выбранный сервер или отключить. Горячая клавиша Ctrl+Shift+C" />
                 <Button x:Name="SaveButton"
                         Content="Сохранить (_S)"
-                        MinWidth="110" MinHeight="32"
+                        MinWidth="110" MinHeight="32" Margin="0,0,8,0"
                         Click="SaveButton_OnClick"
                         AutomationProperties.Name="Сохранить настройки" />
+                <Button x:Name="LogsButton"
+                        Content="Логи (_L)"
+                        MinWidth="100" MinHeight="32"
+                        Click="LogsButton_OnClick"
+                        AutomationProperties.Name="Открыть логи ошибок"
+                        AutomationProperties.HelpText="Создаёт и открывает app.log с ошибками и ходом обновления ядер" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,10,0,0">

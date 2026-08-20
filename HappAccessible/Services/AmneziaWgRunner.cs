@@ -95,7 +95,6 @@ public sealed class AmneziaWgRunner
             }
         }
 
-        progress?.Report(forceUpdate ? "Обновляю AmneziaWG…" : "Скачиваю компоненты AmneziaWG…");
         var arch = RuntimeInformation.ProcessArchitecture switch
         {
             Architecture.Arm64 => "arm64",
@@ -113,16 +112,16 @@ public sealed class AmneziaWgRunner
             tag ??= TryExtractTagFromUrl(msiUrl);
         }
 
-        var msiPath = Path.Combine(_toolsDir, $"amneziawg-{arch}.msi");
-        await using (var fs = File.Create(msiPath))
-        {
-            using var download = await Http.GetAsync(msiUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-            download.EnsureSuccessStatusCode();
-            await download.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
-        }
+        var verLabel = CoreUpdateService.NormalizeTag(tag) ?? tag ?? "";
+        var action = forceUpdate ? "Обновляю" : "Скачиваю";
+        var label = string.IsNullOrEmpty(verLabel) ? "AmneziaWG" : $"AmneziaWG {verLabel}";
+        progress?.Report($"{action} {label}…");
 
-        progress?.Report("Распаковываю AmneziaWG…");
+        var msiPath = Path.Combine(_toolsDir, $"amneziawg-{arch}.msi");
+        await HttpDownload.ToFileAsync(Http, msiUrl, msiPath, progress, $"Загрузка {label}", ct)
+            .ConfigureAwait(false);
+
+        progress?.Report($"Распаковываю {label}…");
         var extractRoot = Path.Combine(_toolsDir, "_extract");
         if (Directory.Exists(extractRoot))
             Directory.Delete(extractRoot, recursive: true);
@@ -172,6 +171,7 @@ public sealed class AmneziaWgRunner
         var state = CoreVersionsState.Load();
         state.AmneziaWg = InstalledVersion;
         state.Save();
+        progress?.Report($"Готово: AmneziaWG {InstalledVersion}.");
     }
 
     private static string? TryExtractTagFromUrl(string url)

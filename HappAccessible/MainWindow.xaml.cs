@@ -296,13 +296,23 @@ public partial class MainWindow : Window
     {
         try
         {
-            try { await _runner.EnsureBinaryAsync(); } catch { /* may download */ }
+            try
+            {
+                var bootProgress = new Progress<string>(ReportCoreProgress);
+                await _runner.EnsureBinaryAsync(progress: bootProgress);
+            }
+            catch (Exception ex)
+            {
+                AppLogService.Warn("Первичная загрузка sing-box: " + ex.Message);
+            }
+
             var state = CoreVersionsState.Load();
             var localSb = state.SingBox ?? CoreUpdateService.NormalizeTag(_runner.CoreVersion);
             var localXr = state.Xray;
             var localAwg = state.AmneziaWg ?? _awg.InstalledVersion;
 
             SetStatus("Проверка обновлений ядер (GitHub)…");
+            AppLogService.Info("Проверка обновлений ядер…");
             var infos = await _coreUpdates.CheckAllAsync(localSb, localXr, localAwg);
             _settings.LastCoreCheckUtc = DateTime.UtcNow;
             PersistSettings();
@@ -312,8 +322,10 @@ public partial class MainWindow : Window
             {
                 string Ver(CoreReleaseInfo i) =>
                     string.IsNullOrEmpty(i.LocalVersion) ? i.RemoteVersion : i.LocalVersion;
-                SetStatus(
-                    $"Ядра актуальны: sing-box {Ver(infos[0])}, Xray {Ver(infos[1])}, AmneziaWG {Ver(infos[2])}.");
+                var ok =
+                    $"Ядра актуальны: sing-box {Ver(infos[0])}, Xray {Ver(infos[1])}, AmneziaWG {Ver(infos[2])}.";
+                SetStatus(ok);
+                AppLogService.Info(ok);
                 return;
             }
 
@@ -324,19 +336,26 @@ public partial class MainWindow : Window
             if (!_settings.AutoUpdateCores)
             {
                 SetStatus($"Доступны обновления ядер: {summary}. Меню Справка → Проверить обновления ядер.");
+                _tray?.Notify($"Доступны обновления ядер: {summary}");
+                AppLogService.Info("Обновления ядер доступны (автовыкл): " + summary);
                 return;
             }
 
             if (_connectedServer is not null || _connectBusy || _awgConnected)
             {
                 SetStatus($"Доступны обновления ядер (отложено, есть подключение): {summary}.");
+                _tray?.Notify("Обновление ядер отложено — есть активное подключение.");
+                AppLogService.Info("Обновление ядер отложено: " + summary);
                 return;
             }
 
             SetStatus($"Обновляю ядра: {summary}…");
+            _tray?.Notify($"Загрузка ядер: {summary}");
+            AppLogService.Info("Начало обновления ядер: " + summary);
+
             foreach (var u in updates)
             {
-                var progress = new Progress<string>(SetStatus);
+                var progress = new Progress<string>(ReportCoreProgress);
                 if (u.Id == "sing-box")
                     await _runner.EnsureBinaryAsync(forceUpdate: true, downloadUrl: u.DownloadUrl,
                         expectedVersion: u.RemoteVersion, progress: progress);
@@ -348,11 +367,47 @@ public partial class MainWindow : Window
                         expectedVersion: u.RemoteVersion, progress: progress);
             }
 
-            SetStatus($"Ядра обновлены: {summary}.");
+            var done = $"Ядра обновлены: {summary}.";
+            SetStatus(done);
+            _tray?.Notify(done);
+            AppLogService.Info(done);
         }
         catch (Exception ex)
         {
             SetStatus("Проверка ядер не удалась: " + ex.Message);
+            AppLogService.Error("Проверка/обновление ядер не удалась", ex);
+            _tray?.Notify("Ошибка обновления ядер — см. Логи");
+        }
+    }
+
+    private void ReportCoreProgress(string message)
+    {
+        SetStatus(message);
+        AppLogService.Info(message);
+        // Balloon on start/finish of a core, not every percent tick
+        if (message.StartsWith("Скачиваю ", StringComparison.Ordinal)
+            || message.StartsWith("Обновляю ", StringComparison.Ordinal)
+            || message.StartsWith("Готово:", StringComparison.Ordinal))
+            _tray?.Notify(message);
+    }
+
+    private void LogsButton_OnClick(object sender, RoutedEventArgs e) => OpenLogs();
+
+    private void MenuOpenLogs_OnClick(object sender, RoutedEventArgs e) => OpenLogs();
+
+    private void OpenLogs()
+    {
+        try
+        {
+            AppLogService.EnsureLogFile();
+            AppLogService.Info("Пользователь открыл логи.");
+            AppLogService.OpenInExplorer();
+            SetStatus($"Логи: {AppLogService.LogPath}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Не удалось открыть логи: " + ex.Message);
+            AppLogService.Error("Не удалось открыть логи", ex);
         }
     }
 
@@ -1675,6 +1730,9 @@ public partial class MainWindow : Window
             await _xray.StopAsync();
             _connectedServer = null;
             _awgConnected = false;
+            if (!string.IsNullOrWhiteSpace(_runner.RecentLog))
+                AppLogService.Error("sing-box log: " + _runner.RecentLog);
+            AppLogService.Error("Ошибка подключения", ex);
             SetStatus("Ошибка подключения: " + ex.Message);
             _tray?.SetTooltip("Happ Accessible — ошибка");
             UpdateConnectToggleUi();
@@ -1763,6 +1821,9 @@ public partial class MainWindow : Window
             _proxy.DisableIfOwned();
             await _xray.StopAsync();
             _connectedServer = null;
+            if (!string.IsNullOrWhiteSpace(_xray.RecentLog))
+                AppLogService.Error("xray log: " + _xray.RecentLog);
+            AppLogService.Error("Ошибка Xray", ex);
             SetStatus("Ошибка Xray: " + ex.Message);
             UpdateConnectToggleUi();
             return ConnectOutcome.Failed;
@@ -1845,6 +1906,7 @@ public partial class MainWindow : Window
             _awgConnected = false;
             _connectedServer = null;
             try { await _awg.DisconnectAsync(); } catch { /* ignore */ }
+            AppLogService.Error("Ошибка AmneziaWG", ex);
             SetStatus("Ошибка AmneziaWG: " + ex.Message);
             _tray?.SetTooltip("Happ Accessible — ошибка AWG");
             UpdateConnectToggleUi();
@@ -2284,5 +2346,17 @@ public partial class MainWindow : Window
         StatusText.Text = text;
         AutomationProperties.SetName(StatusText, "Статус: " + text);
         // Do not Focus() — steals keyboard from NVDA users mid-interaction
+        if (LooksLikeErrorStatus(text))
+            AppLogService.Error(text);
+    }
+
+    private static bool LooksLikeErrorStatus(string text)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            return false;
+        return text.StartsWith("Ошибка", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("не удалась", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("не удалось", StringComparison.OrdinalIgnoreCase)
+               || text.Contains("сразу завершился", StringComparison.OrdinalIgnoreCase);
     }
 }

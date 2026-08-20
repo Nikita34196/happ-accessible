@@ -64,7 +64,6 @@ public sealed class XrayRunner : IDisposable
             return;
         }
 
-        progress?.Report(forceUpdate ? "Обновляю Xray…" : "Скачиваю Xray…");
         string zipUrl;
         string? tag = expectedVersion;
         if (!string.IsNullOrEmpty(downloadUrl))
@@ -98,15 +97,15 @@ public sealed class XrayRunner : IDisposable
         if (_process is { HasExited: false })
             await StopAsync().ConfigureAwait(false);
 
-        await using (var fs = File.Create(zipPath))
-        {
-            using var download = await Http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-            download.EnsureSuccessStatusCode();
-            await download.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
-        }
+        var verLabel = CoreUpdateService.NormalizeTag(tag) ?? tag ?? "";
+        var action = forceUpdate ? "Обновляю" : "Скачиваю";
+        var label = string.IsNullOrEmpty(verLabel) ? "Xray" : $"Xray {verLabel}";
+        progress?.Report($"{action} {label}…");
 
-        progress?.Report("Распаковываю Xray…");
+        await HttpDownload.ToFileAsync(Http, zipUrl, zipPath, progress, $"Загрузка {label}", ct)
+            .ConfigureAwait(false);
+
+        progress?.Report($"Распаковываю {label}…");
         var extract = Path.Combine(_toolsDir, "_extract");
         if (Directory.Exists(extract))
             Directory.Delete(extract, recursive: true);
@@ -129,6 +128,7 @@ public sealed class XrayRunner : IDisposable
         var state = CoreVersionsState.Load();
         state.Xray = CoreUpdateService.NormalizeTag(tag) ?? CoreUpdateService.NormalizeTag(CoreVersion);
         state.Save();
+        progress?.Report($"Готово: Xray {state.Xray}.");
     }
 
     private async Task TryReadVersionAsync(CancellationToken ct)
@@ -230,6 +230,8 @@ public sealed class XrayRunner : IDisposable
         }
     }
 
+    public string LogPath => Path.Combine(_toolsDir, "xray.log");
+
     private void AppendLog(string? line)
     {
         if (string.IsNullOrEmpty(line))
@@ -239,6 +241,15 @@ public sealed class XrayRunner : IDisposable
             _log.AppendLine(line);
             if (_log.Length > 20_000)
                 _log.Remove(0, _log.Length - 10_000);
+        }
+
+        try
+        {
+            File.AppendAllText(LogPath, line + Environment.NewLine);
+        }
+        catch
+        {
+            // ignore
         }
     }
 

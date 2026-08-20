@@ -70,7 +70,6 @@ public sealed class SingBoxRunner : IDisposable
         if (_process is { HasExited: false })
             await StopAsync().ConfigureAwait(false);
 
-        progress?.Report(forceUpdate ? "Обновляю sing-box…" : "Скачиваю sing-box…");
         string zipUrl;
         string? tag = expectedVersion;
         if (!string.IsNullOrEmpty(downloadUrl))
@@ -101,16 +100,16 @@ public sealed class SingBoxRunner : IDisposable
                 throw new InvalidOperationException("Не найден sing-box windows-amd64 в релизе.");
         }
 
-        var zipPath = Path.Combine(_toolsDir, "sing-box.zip");
-        await using (var fs = File.Create(zipPath))
-        {
-            using var download = await Http.GetAsync(zipUrl, HttpCompletionOption.ResponseHeadersRead, ct)
-                .ConfigureAwait(false);
-            download.EnsureSuccessStatusCode();
-            await download.Content.CopyToAsync(fs, ct).ConfigureAwait(false);
-        }
+        var verLabel = CoreUpdateService.NormalizeTag(tag) ?? tag ?? "";
+        var action = forceUpdate ? "Обновляю" : "Скачиваю";
+        var label = string.IsNullOrEmpty(verLabel) ? "sing-box" : $"sing-box {verLabel}";
+        progress?.Report($"{action} {label}…");
 
-        progress?.Report("Распаковываю sing-box…");
+        var zipPath = Path.Combine(_toolsDir, "sing-box.zip");
+        await HttpDownload.ToFileAsync(Http, zipUrl, zipPath, progress, $"Загрузка {label}", ct)
+            .ConfigureAwait(false);
+
+        progress?.Report($"Распаковываю {label}…");
         ZipFile.ExtractToDirectory(zipPath, _toolsDir, overwriteFiles: true);
         try { File.Delete(zipPath); } catch { /* ignore */ }
 
@@ -127,6 +126,7 @@ public sealed class SingBoxRunner : IDisposable
         state.SingBox = CoreUpdateService.NormalizeTag(tag)
                         ?? CoreUpdateService.NormalizeTag(CoreVersion);
         state.Save();
+        progress?.Report($"Готово: sing-box {state.SingBox}.");
     }
 
     private async Task TryReadCoreVersionAsync(string exe, CancellationToken ct)

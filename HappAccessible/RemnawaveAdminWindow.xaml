@@ -1,0 +1,120 @@
+<Window x:Class="HappAccessible.RemnawaveAdminWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Управление Remnawave"
+        Height="640" Width="720"
+        MinHeight="520" MinWidth="560"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False"
+        AutomationProperties.Name="Управление панелью Remnawave">
+    <DockPanel Margin="12">
+        <TextBlock x:Name="StatusText"
+                   DockPanel.Dock="Bottom"
+                   Margin="0,10,0,0"
+                   TextWrapping="Wrap"
+                   Focusable="True"
+                   AutomationProperties.LiveSetting="Assertive"
+                   AutomationProperties.Name="Статус панели"
+                   Text="Сначала сохраните URL панели и API-токен (в Remnawave: API Tokens)." />
+
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <TextBlock TextWrapping="Wrap" Margin="0,0,0,10"
+                           Text="Упрощённое управление без веб-панели: создать ссылку, лимит устройств, список устройств. Лучше открывать при выключенном VPN." />
+
+                <GroupBox Header="Доступ к API" Padding="8" Margin="0,0,0,12"
+                          AutomationProperties.Name="Доступ к API Remnawave">
+                    <StackPanel>
+                        <Label Content="URL панели (например https://194.87.49.190.sslip.io)"
+                               Target="{Binding ElementName=PanelUrlBox}" />
+                        <TextBox x:Name="PanelUrlBox"
+                                 MinHeight="28" Margin="0,0,0,8"
+                                 AutomationProperties.Name="URL панели Remnawave" />
+                        <Label Content="API-токен"
+                               Target="{Binding ElementName=ApiTokenBox}" />
+                        <PasswordBox x:Name="ApiTokenBox"
+                                     MinHeight="28" Margin="0,0,0,8"
+                                     AutomationProperties.Name="API-токен Remnawave" />
+                        <Button Content="Сохранить доступ (_S)"
+                                MinHeight="32" HorizontalAlignment="Left"
+                                Click="SaveAccess_OnClick"
+                                AutomationProperties.Name="Сохранить URL и токен" />
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Создать новую ссылку" Padding="8" Margin="0,0,0,12"
+                          AutomationProperties.Name="Создать новую ссылку подписки">
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Label Content="Имя пользователя:" Target="{Binding ElementName=NewUserBox}" VerticalAlignment="Center" />
+                            <TextBox x:Name="NewUserBox" Width="180" MinHeight="28" Margin="0,0,12,0"
+                                     AutomationProperties.Name="Имя нового пользователя" />
+                            <Label Content="Дней:" Target="{Binding ElementName=DaysBox}" VerticalAlignment="Center" />
+                            <TextBox x:Name="DaysBox" Width="50" MinHeight="28" Text="30" Margin="0,0,12,0"
+                                     AutomationProperties.Name="Срок подписки в днях" />
+                            <Label Content="Устройств:" Target="{Binding ElementName=NewLimitBox}" VerticalAlignment="Center" />
+                            <TextBox x:Name="NewLimitBox" Width="40" MinHeight="28" Text="2"
+                                     AutomationProperties.Name="Лимит устройств для новой ссылки" />
+                        </StackPanel>
+                        <Button Content="Создать ссылку одной кнопкой (_N)"
+                                MinHeight="36" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                Click="CreateLink_OnClick"
+                                AutomationProperties.Name="Создать ссылку подписки"
+                                AutomationProperties.HelpText="Создаёт пользователя в Remnawave и показывает subscription URL" />
+                        <Label Content="Новая ссылка:" Target="{Binding ElementName=NewLinkBox}" />
+                        <TextBox x:Name="NewLinkBox"
+                                 MinHeight="56" TextWrapping="Wrap" AcceptsReturn="True"
+                                 IsReadOnly="True"
+                                 AutomationProperties.Name="Новая ссылка подписки" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="Копировать" MinWidth="110" MinHeight="32" Margin="0,0,8,0"
+                                    Click="CopyLink_OnClick"
+                                    AutomationProperties.Name="Копировать новую ссылку" />
+                            <Button Content="Применить в Happ" MinWidth="140" MinHeight="32"
+                                    Click="ApplyLink_OnClick"
+                                    AutomationProperties.Name="Применить новую ссылку в Happ Accessible" />
+                        </StackPanel>
+                    </StackPanel>
+                </GroupBox>
+
+                <GroupBox Header="Текущая / выбранная подписка" Padding="8" Margin="0,0,0,12"
+                          AutomationProperties.Name="Управление текущей подпиской">
+                    <StackPanel>
+                        <Label Content="Short UUID или имя пользователя"
+                               Target="{Binding ElementName=LookupBox}" />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <TextBox x:Name="LookupBox" Width="280" MinHeight="28" Margin="0,0,8,0"
+                                     AutomationProperties.Name="Short UUID или имя пользователя" />
+                            <Button Content="Загрузить (_L)" MinWidth="110" MinHeight="32"
+                                    Click="LoadUser_OnClick"
+                                    AutomationProperties.Name="Загрузить пользователя" />
+                        </StackPanel>
+                        <TextBlock x:Name="UserInfoText" TextWrapping="Wrap" Margin="0,0,0,8"
+                                   AutomationProperties.Name="Сведения о пользователе"
+                                   Text="Пользователь не загружен." />
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Label Content="Лимит устройств:" Target="{Binding ElementName=LimitBox}" VerticalAlignment="Center" />
+                            <TextBox x:Name="LimitBox" Width="50" MinHeight="28" Margin="0,0,8,0"
+                                     AutomationProperties.Name="Лимит устройств" />
+                            <Button Content="Изменить лимит (_D)" MinWidth="140" MinHeight="32"
+                                    Click="SetLimit_OnClick"
+                                    AutomationProperties.Name="Изменить лимит устройств" />
+                        </StackPanel>
+                        <Button Content="Показать устройства (_V)"
+                                MinHeight="32" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                Click="ShowDevices_OnClick"
+                                AutomationProperties.Name="Показать подключённые устройства" />
+                        <ListBox x:Name="DeviceList"
+                                 Height="140"
+                                 AutomationProperties.Name="Список устройств HWID"
+                                 AutomationProperties.HelpText="Выберите устройство и удалите при необходимости" />
+                        <Button Content="Удалить выбранное устройство"
+                                MinHeight="32" HorizontalAlignment="Left" Margin="0,8,0,0"
+                                Click="DeleteDevice_OnClick"
+                                AutomationProperties.Name="Удалить выбранное устройство" />
+                    </StackPanel>
+                </GroupBox>
+            </StackPanel>
+        </ScrollViewer>
+    </DockPanel>
+</Window>

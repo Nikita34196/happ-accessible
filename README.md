@@ -2,7 +2,7 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.11)
+## Возможности (0.3.12)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML
 - **AmneziaWG / WireGuard** — импорт `.conf`
@@ -15,6 +15,7 @@
 - **Автообновление ядер** (sing-box-lx, Xray, AmneziaWG) и **приложения** через GitHub Releases — статус, % загрузки, уведомления в трее
 - Кнопка **Логи** / Справка → Открыть логи — `app.log` с ошибками
 - Системный прокси и TUN, автопереключение на обход белых списков
+- **Управление Remnawave** (Подписка → Управление Remnawave): создать ссылку, лимит устройств, список HWID через API-токен
 
 ## Happ crypt (`happ://crypt…`)
 
@@ -45,11 +46,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.11` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.12` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.11
-git push origin v0.3.11
+git tag v0.3.12
+git push origin v0.3.12
 ```
 
 ## Клавиши

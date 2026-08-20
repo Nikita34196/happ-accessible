@@ -21,6 +21,9 @@
                 <MenuItem Header="_Обновить подписку" Click="MenuRefreshSubscription_OnClick"
                           InputGestureText="F5"
                           AutomationProperties.Name="Обновить подписку" />
+                <MenuItem Header="Управление _Remnawave…" Click="MenuRemnawaveAdmin_OnClick"
+                          AutomationProperties.Name="Управление панелью Remnawave"
+                          AutomationProperties.HelpText="Создать ссылку, лимит устройств, список устройств через API" />
                 <Separator />
                 <MenuItem Header="Импорт списка _доменов из URL…" Click="MenuImportDomainListUrl_OnClick"
                           AutomationProperties.Name="Импорт списка доменов или GeoSite из URL" />

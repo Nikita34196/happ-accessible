@@ -46,6 +46,11 @@ public sealed class AppSettings
     /// </summary>
     public bool AutoWhitelistFailover { get; set; } = true;
 
+    /// <summary>Remnawave panel base URL for in-app admin (e.g. https://host.sslip.io).</summary>
+    public string? RemnawavePanelUrl { get; set; }
+    /// <summary>Remnawave API bearer token (stored locally only).</summary>
+    public string? RemnawaveApiToken { get; set; }
+
     /// <summary>Custom display names keyed by RawUri.</summary>
     public Dictionary<string, string> ServerNameOverrides { get; set; } = new(StringComparer.Ordinal);
 

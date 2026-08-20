@@ -621,6 +621,13 @@ public partial class MainWindow : Window
     private async void MenuEditSubscription_OnClick(object sender, RoutedEventArgs e) =>
         await EditSubscriptionAsync();
 
+    private async void MenuRemnawaveAdmin_OnClick(object sender, RoutedEventArgs e)
+    {
+        var dlg = new RemnawaveAdminWindow(_settings) { Owner = this };
+        if (dlg.ShowDialog() == true && !string.IsNullOrWhiteSpace(dlg.AppliedSubscriptionUrl))
+            await ApplyImportedTextAsync(dlg.AppliedSubscriptionUrl, sourceLabel: "панели Remnawave");
+    }
+
     private async void MenuRefreshSubscription_OnClick(object sender, RoutedEventArgs e) =>
         await RefreshSubscriptionAsync();
 

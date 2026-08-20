@@ -64,13 +64,12 @@ public sealed class SingBoxRunner : IDisposable
         if (File.Exists(exe) && !forceUpdate)
         {
             await TryReadCoreVersionAsync(exe, ct).ConfigureAwait(false);
-            var stateProbe = CoreVersionsState.Load();
-            var localVer = stateProbe.SingBox ?? CoreVersion;
-            // Replace stock SagerNet binary with sing-box-lx (XHTTP) when present
-            if (CoreUpdateService.IsLxBuild(localVer)
-                || (localVer is not null && localVer.Contains("lx", StringComparison.OrdinalIgnoreCase)))
+            // Trust the real binary only — core-versions.json can lie after a failed replace
+            if (CoreUpdateService.IsLxBuild(CoreVersion))
                 return;
             forceUpdate = true;
+            progress?.Report(
+                $"Найден stock sing-box ({CoreVersion ?? "—"}) без xhttp — ставлю sing-box-lx…");
         }
 
         if (_process is { HasExited: false })
@@ -113,34 +112,59 @@ public sealed class SingBoxRunner : IDisposable
         progress?.Report($"{action} {label}…");
 
         var zipPath = Path.Combine(_toolsDir, "sing-box.zip");
+        var extractDir = Path.Combine(_toolsDir, "_extract-sing-box");
+        if (Directory.Exists(extractDir))
+            Directory.Delete(extractDir, recursive: true);
+        Directory.CreateDirectory(extractDir);
+
         await HttpDownload.ToFileAsync(Http, zipUrl, zipPath, progress, $"Загрузка {label}", ct)
             .ConfigureAwait(false);
 
         progress?.Report($"Распаковываю {label}…");
-        ZipFile.ExtractToDirectory(zipPath, _toolsDir, overwriteFiles: true);
+        ZipFile.ExtractToDirectory(zipPath, extractDir, overwriteFiles: true);
         try { File.Delete(zipPath); } catch { /* ignore */ }
 
-        if (!File.Exists(exe))
+        var found = Directory.GetFiles(extractDir, "sing-box.exe", SearchOption.AllDirectories)
+                        .OrderByDescending(f => new FileInfo(f).Length)
+                        .FirstOrDefault()
+                    ?? throw new FileNotFoundException("sing-box.exe не найден после распаковки lx.");
+
+        var foundDir = Path.GetDirectoryName(found)!;
+        // Replace root binary atomically enough for Windows (delete then copy)
+        try
         {
-            var found = Directory.GetFiles(_toolsDir, "sing-box.exe", SearchOption.AllDirectories).FirstOrDefault();
-            if (found is null)
-                throw new FileNotFoundException("sing-box.exe не найден после распаковки.");
-            File.Copy(found, exe, overwrite: true);
+            if (File.Exists(exe))
+                File.Delete(exe);
         }
-        else
+        catch (Exception ex)
         {
-            // Zip may extract to a subfolder — prefer that over stale root exe
-            var found = Directory.GetFiles(_toolsDir, "sing-box.exe", SearchOption.AllDirectories)
-                .OrderByDescending(f => new FileInfo(f).LastWriteTimeUtc)
-                .FirstOrDefault();
-            if (found is not null && !string.Equals(found, exe, StringComparison.OrdinalIgnoreCase))
-                File.Copy(found, exe, overwrite: true);
+            throw new IOException(
+                "Не удалось заменить sing-box.exe (файл занят?). Закройте Happ Accessible и повторите обновление ядер. "
+                + ex.Message, ex);
         }
 
+        File.Copy(found, exe, overwrite: true);
+        // lx ships libcronet.dll next to the exe (naive outbound)
+        foreach (var extra in new[] { "libcronet.dll", "wintun.dll" })
+        {
+            var src = Path.Combine(foundDir, extra);
+            if (File.Exists(src))
+                File.Copy(src, Path.Combine(_toolsDir, extra), overwrite: true);
+        }
+
+        try { Directory.Delete(extractDir, recursive: true); } catch { /* keep */ }
+
         await TryReadCoreVersionAsync(exe, ct).ConfigureAwait(false);
+        var saved = CoreUpdateService.IsLxBuild(CoreVersion)
+            ? CoreUpdateService.NormalizeTag(CoreVersion)
+            : CoreUpdateService.NormalizeTag(tag);
+
+        if (!CoreUpdateService.IsLxBuild(saved))
+            throw new InvalidOperationException(
+                $"Установка sing-box-lx не подтверждена (version={CoreVersion}, tag={tag}).");
+
         var state = CoreVersionsState.Load();
-        state.SingBox = CoreUpdateService.NormalizeTag(tag)
-                        ?? CoreUpdateService.NormalizeTag(CoreVersion);
+        state.SingBox = saved;
         state.Save();
         progress?.Report($"Готово: sing-box {state.SingBox}.");
     }
@@ -166,7 +190,7 @@ public sealed class SingBoxRunner : IDisposable
             var line = output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                 .FirstOrDefault();
             if (!string.IsNullOrWhiteSpace(line))
-                CoreVersion = line.Trim();
+                CoreVersion = CoreUpdateService.NormalizeTag(line) ?? line.Trim();
         }
         catch
         {

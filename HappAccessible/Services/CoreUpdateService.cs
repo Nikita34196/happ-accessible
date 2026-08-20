@@ -79,14 +79,18 @@ public sealed class CoreUpdateService
 
     public async Task<CoreReleaseInfo> CheckSingBoxAsync(string? local, CancellationToken ct)
     {
+        // Fork with XHTTP (+ AWG2) — same approach as Vireo/singbox-launcher (Leadaxe/sing-box-lx)
         var (tag, url) = await LatestAssetAsync(
-            "SagerNet/sing-box",
+            "Leadaxe/sing-box-lx",
             name => name.Contains("windows-amd64", StringComparison.OrdinalIgnoreCase)
-                    && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase),
+                    && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("legacy", StringComparison.OrdinalIgnoreCase),
             ct).ConfigureAwait(false);
         var remote = NormalizeTag(tag) ?? "";
         local = NormalizeTag(local) ?? "";
-        return new CoreReleaseInfo("sing-box", local, remote, url, IsNewer(remote, local));
+        // Stock SagerNet builds lack xhttp — treat any non-lx local as outdated
+        var update = IsNewer(remote, local) || (IsLxBuild(remote) && !IsLxBuild(local) && !string.IsNullOrEmpty(remote));
+        return new CoreReleaseInfo("sing-box", local, remote, url, update);
     }
 
     public async Task<CoreReleaseInfo> CheckXrayAsync(string? local, CancellationToken ct)
@@ -177,6 +181,13 @@ public sealed class CoreUpdateService
         return tag;
     }
 
+    public static bool IsLxBuild(string? version)
+    {
+        version = NormalizeTag(version);
+        return !string.IsNullOrEmpty(version)
+               && version.Contains("-lx", StringComparison.OrdinalIgnoreCase);
+    }
+
     /// <summary>True if remote looks newer than local (empty local → update available).</summary>
     public static bool IsNewer(string? remote, string? local)
     {
@@ -189,11 +200,36 @@ public sealed class CoreUpdateService
         if (string.Equals(remote, local, StringComparison.OrdinalIgnoreCase))
             return false;
 
-        if (Version.TryParse(PadVersion(remote), out var r)
-            && Version.TryParse(PadVersion(local), out var l))
-            return r > l;
+        // Migrate stock → lx fork even when base numbers look similar
+        if (IsLxBuild(remote) && !IsLxBuild(local))
+            return true;
+
+        var (rBase, rLx) = SplitLxVersion(remote);
+        var (lBase, lLx) = SplitLxVersion(local);
+        if (Version.TryParse(PadVersion(rBase), out var r)
+            && Version.TryParse(PadVersion(lBase), out var l))
+        {
+            var cmp = r.CompareTo(l);
+            if (cmp != 0)
+                return cmp > 0;
+            return rLx > lLx;
+        }
 
         return string.Compare(remote, local, StringComparison.OrdinalIgnoreCase) > 0;
+    }
+
+    private static (string baseVersion, int lxPatch) SplitLxVersion(string v)
+    {
+        var i = v.IndexOf("-lx.", StringComparison.OrdinalIgnoreCase);
+        if (i < 0)
+            i = v.IndexOf("-lx", StringComparison.OrdinalIgnoreCase);
+        if (i < 0)
+            return (v, 0);
+        var bas = v[..i];
+        var rest = v[(i + 1)..]; // lx.26 or lx26
+        var digits = new string(rest.Where(char.IsDigit).ToArray());
+        _ = int.TryParse(digits, out var n);
+        return (bas, n);
     }
 
     private static string PadVersion(string v)

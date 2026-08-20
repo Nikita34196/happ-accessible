@@ -14,7 +14,7 @@ public static class CoreSelector
         if (string.Equals(server.Protocol, "amneziawg", StringComparison.OrdinalIgnoreCase))
             return ProxyCoreKind.SingBox; // unused — AWG path is separate
 
-        // TUN / app routing / geosite modes need sing-box
+        // TUN / app routing / geosite modes need sing-box (lx fork supports xhttp)
         if (useTun
             || routingMode is RoutingMode.AppProxy or RoutingMode.AppBypass
                 or RoutingMode.BypassRu or RoutingMode.ProxyList or RoutingMode.BypassList)
@@ -34,12 +34,47 @@ public static class CoreSelector
         if (preference == ProxyCoreKind.Xray)
             return ProxyCoreKind.Xray;
 
-        // Auto: Reality / Vision → Xray (proxy mode)
         var uri = server.RawUri ?? "";
-        if (LooksRealityOrVision(uri))
+
+        // Auto without TUN: Reality / Vision → Xray (stable); xhttp also fine on Xray
+        if (LooksRealityOrVision(uri) || NeedsXrayTransport(uri))
             return ProxyCoreKind.Xray;
 
         return ProxyCoreKind.SingBox;
+    }
+
+    /// <summary>XHTTP / SplitHTTP — stock sing-box lacks these; lx fork and Xray support them.</summary>
+    public static bool NeedsXrayTransport(string uri)
+    {
+        if (string.IsNullOrEmpty(uri))
+            return false;
+        return ContainsQueryToken(uri, "type", "xhttp")
+               || ContainsQueryToken(uri, "type", "splithttp")
+               || ContainsQueryToken(uri, "network", "xhttp")
+               || ContainsQueryToken(uri, "network", "splithttp")
+               || ContainsQueryToken(uri, "net", "xhttp")
+               || ContainsQueryToken(uri, "net", "splithttp")
+               || uri.Contains("\"network\":\"xhttp\"", StringComparison.OrdinalIgnoreCase)
+               || uri.Contains("\"network\": \"xhttp\"", StringComparison.OrdinalIgnoreCase)
+               || uri.Contains("network: xhttp", StringComparison.OrdinalIgnoreCase)
+               || uri.Contains("network:xhttp", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool ContainsQueryToken(string uri, string key, string value)
+    {
+        var needle = key + "=" + value;
+        var i = uri.IndexOf(needle, StringComparison.OrdinalIgnoreCase);
+        if (i < 0)
+            return false;
+        var end = i + needle.Length;
+        if (end < uri.Length)
+        {
+            var c = uri[end];
+            if (c is not ('&' or '#' or '/' or '?') && !char.IsWhiteSpace(c))
+                return false;
+        }
+
+        return true;
     }
 
     public static bool LooksRealityOrVision(string uri) =>

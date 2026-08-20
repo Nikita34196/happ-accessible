@@ -64,7 +64,13 @@ public sealed class SingBoxRunner : IDisposable
         if (File.Exists(exe) && !forceUpdate)
         {
             await TryReadCoreVersionAsync(exe, ct).ConfigureAwait(false);
-            return;
+            var stateProbe = CoreVersionsState.Load();
+            var localVer = stateProbe.SingBox ?? CoreVersion;
+            // Replace stock SagerNet binary with sing-box-lx (XHTTP) when present
+            if (CoreUpdateService.IsLxBuild(localVer)
+                || (localVer is not null && localVer.Contains("lx", StringComparison.OrdinalIgnoreCase)))
+                return;
+            forceUpdate = true;
         }
 
         if (_process is { HasExited: false })
@@ -79,7 +85,7 @@ public sealed class SingBoxRunner : IDisposable
         else
         {
             using var releaseResponse = await Http.GetAsync(
-                "https://api.github.com/repos/SagerNet/sing-box/releases/latest", ct).ConfigureAwait(false);
+                "https://api.github.com/repos/Leadaxe/sing-box-lx/releases/latest", ct).ConfigureAwait(false);
             releaseResponse.EnsureSuccessStatusCode();
             await using var stream = await releaseResponse.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
             using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
@@ -89,7 +95,8 @@ public sealed class SingBoxRunner : IDisposable
             {
                 var name = asset.GetProperty("name").GetString() ?? "";
                 if (name.Contains("windows-amd64", StringComparison.OrdinalIgnoreCase)
-                    && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                    && name.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)
+                    && !name.Contains("legacy", StringComparison.OrdinalIgnoreCase))
                 {
                     zipUrl = asset.GetProperty("browser_download_url").GetString()!;
                     break;
@@ -97,12 +104,12 @@ public sealed class SingBoxRunner : IDisposable
             }
 
             if (string.IsNullOrEmpty(zipUrl))
-                throw new InvalidOperationException("Не найден sing-box windows-amd64 в релизе.");
+                throw new InvalidOperationException("Не найден sing-box-lx windows-amd64 в релизе.");
         }
 
         var verLabel = CoreUpdateService.NormalizeTag(tag) ?? tag ?? "";
         var action = forceUpdate ? "Обновляю" : "Скачиваю";
-        var label = string.IsNullOrEmpty(verLabel) ? "sing-box" : $"sing-box {verLabel}";
+        var label = string.IsNullOrEmpty(verLabel) ? "sing-box-lx" : $"sing-box-lx {verLabel}";
         progress?.Report($"{action} {label}…");
 
         var zipPath = Path.Combine(_toolsDir, "sing-box.zip");
@@ -119,6 +126,15 @@ public sealed class SingBoxRunner : IDisposable
             if (found is null)
                 throw new FileNotFoundException("sing-box.exe не найден после распаковки.");
             File.Copy(found, exe, overwrite: true);
+        }
+        else
+        {
+            // Zip may extract to a subfolder — prefer that over stale root exe
+            var found = Directory.GetFiles(_toolsDir, "sing-box.exe", SearchOption.AllDirectories)
+                .OrderByDescending(f => new FileInfo(f).LastWriteTimeUtc)
+                .FirstOrDefault();
+            if (found is not null && !string.Equals(found, exe, StringComparison.OrdinalIgnoreCase))
+                File.Copy(found, exe, overwrite: true);
         }
 
         await TryReadCoreVersionAsync(exe, ct).ConfigureAwait(false);

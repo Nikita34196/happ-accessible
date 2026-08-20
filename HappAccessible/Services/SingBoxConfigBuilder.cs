@@ -504,7 +504,7 @@ public static class SingBoxConfigBuilder
         }
         else if (type is "xhttp" or "splithttp")
         {
-            // Vision flow is TCP-only — drop it for xhttp
+            // Vision flow is TCP-only — drop it for xhttp (sing-box-lx supports type=xhttp)
             outbound.Remove("flow");
             var mode = Q(q, "mode") ?? "auto";
             var transport = new Dictionary<string, object?>

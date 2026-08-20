@@ -2,17 +2,17 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.8)
+## Возможности (0.3.9)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML
 - **AmneziaWG / WireGuard** — импорт `.conf`
-- **Dual-core:** sing-box (TUN, маршруты, hy2/WG) и Xray (Reality/Vision в режиме Авто)
+- **Dual-core:** [sing-box-lx](https://github.com/Leadaxe/sing-box-lx) (TUN, маршруты, **xhttp**, hy2/WG) и Xray (Reality/Vision в режиме Авто)
 - Одна кнопка **Подключить / Отключить**, пинг выбранного и всех серверов
 - Информация о подписке: трафик, срок, время обновления
 - Переименование серверов (F2), сохраняется локально
 - Меню трея: серверы, проверка соединения, пинг
 - Маршруты: списки доменов, `geosite:` / `geoip:` (rule-set с GitHub), режимы по приложениям
-- **Автообновление ядер** (sing-box, Xray, AmneziaWG) и **приложения** через GitHub Releases — статус, % загрузки, уведомления в трее
+- **Автообновление ядер** (sing-box-lx, Xray, AmneziaWG) и **приложения** через GitHub Releases — статус, % загрузки, уведомления в трее
 - Кнопка **Логи** / Справка → Открыть логи — `app.log` с ошибками
 - Системный прокси и TUN, автопереключение на обход белых списков
 
@@ -45,11 +45,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.8` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.9` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.8
-git push origin v0.3.8
+git tag v0.3.9
+git push origin v0.3.9
 ```
 
 ## Клавиши

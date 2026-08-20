@@ -2185,10 +2185,17 @@ public partial class MainWindow : Window
         return EngineOptions.DefaultTunStack;
     }
 
-    /// <summary>Hints for Reality/Vision when sing-box may struggle (Vireo keeps Xray for that).</summary>
+    /// <summary>Hints for Reality/Vision/xhttp when core choice matters.</summary>
     private static string BuildCoreHint(ServerProfile server, bool failed)
     {
         var uri = server.RawUri ?? "";
+        if (CoreSelector.NeedsXrayTransport(uri))
+        {
+            return failed
+                ? " Узел xhttp: нужен sing-box-lx (автообновление ядер) или Xray без TUN. "
+                : " (xhttp: sing-box-lx / Xray.)";
+        }
+
         var reality = uri.Contains("security=reality", StringComparison.OrdinalIgnoreCase)
                       || uri.Contains("pbk=", StringComparison.OrdinalIgnoreCase);
         var vision = uri.Contains("xtls-rprx-vision", StringComparison.OrdinalIgnoreCase)

@@ -23,6 +23,11 @@ dist/
 *.exe
 !installer/**
 
+# Local notes / scratch (not part of the app)
+docs/
+tmp-epk/
+tmp-*/
+
 # OS junk
 Thumbs.db
 Desktop.ini

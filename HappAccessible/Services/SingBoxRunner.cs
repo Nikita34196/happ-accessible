@@ -16,7 +16,7 @@ public sealed class SingBoxRunner : IDisposable
     private static HttpClient CreateHttp()
     {
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/0.2");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + AppUpdateService.GetCurrentVersion());
         return http;
     }
 
@@ -217,7 +217,8 @@ public sealed class SingBoxRunner : IDisposable
         _process.BeginErrorReadLine();
 
         // Give core a moment to bind / fail fast
-        await Task.Delay(800, ct).ConfigureAwait(false);
+        await ConnectivityProbe.WaitForProcessReadyAsync(_process, TimeSpan.FromSeconds(2), ct)
+            .ConfigureAwait(false);
         if (_process.HasExited)
         {
             var code = _process.ExitCode;
@@ -226,28 +227,8 @@ public sealed class SingBoxRunner : IDisposable
         }
     }
 
-    public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            var handler = new HttpClientHandler
-            {
-                Proxy = new WebProxy($"http://127.0.0.1:{_activeMixedPort}"),
-                UseProxy = true,
-                // ignore TLS for probe targets that redirect oddly
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
-            // generate_204 is a reliable "tunnel alive" check used by Clash/Hiddify
-            using var resp = await client.GetAsync("http://www.gstatic.com/generate_204", ct)
-                .ConfigureAwait(false);
-            return (int)resp.StatusCode is 204 or 200 or 301 or 302;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default) =>
+        await ConnectivityProbe.ProbeHttpViaProxyAsync(_activeMixedPort, ct).ConfigureAwait(false);
 
     public async Task StopAsync()
     {

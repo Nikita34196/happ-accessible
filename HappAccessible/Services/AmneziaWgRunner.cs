@@ -21,7 +21,7 @@ public sealed class AmneziaWgRunner
     private static HttpClient CreateHttp()
     {
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/0.3");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + AppUpdateService.GetCurrentVersion());
         return http;
     }
 

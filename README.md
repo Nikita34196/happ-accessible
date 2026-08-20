@@ -2,19 +2,18 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.6)
+## Возможности (0.3.7)
 
-- Открытые подписки / вставка списка: `vless`, `vmess`, `trojan`, `ss`, `hysteria2`/`hy2`
+- Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML
 - **AmneziaWG / WireGuard** — импорт `.conf`
-- **Dual-core:** **sing-box** (TUN, маршруты, hy2) и **Xray** (прокси Reality/Vision в режиме Авто)
-- **Меню трея:** выбор сервера и подключение прямо из значка (ПКМ → Серверы)
-- Проверка обновлений ядер при старте через GitHub releases (sing-box, Xray, AmneziaWG)
-- **Системный прокси** и **TUN** (авто-UAC; стек TUN: gvisor / mixed / system)
-- Настраиваемый **mixed-порт** (по умолчанию 2080)
-- Меню **Alt → Подписка**, режимы по сайтам / РФ / приложениям
-- Проверка серверов обхода белых списков
-- Автообновление подписки и автопереключение на обход БС
-- Пинг, трей, сохранение настроек, автоподключение
+- **Dual-core:** sing-box (TUN, маршруты, hy2/WG) и Xray (Reality/Vision в режиме Авто)
+- Одна кнопка **Подключить / Отключить**, пинг выбранного и всех серверов
+- Информация о подписке: трафик, срок, время обновления
+- Переименование серверов (F2), сохраняется локально
+- Меню трея: серверы, проверка соединения, пинг
+- Маршруты: списки доменов, `geosite:` / `geoip:` (rule-set с GitHub), режимы по приложениям
+- **Автообновление ядер** (sing-box, Xray, AmneziaWG) и **приложения** через GitHub Releases
+- Системный прокси и TUN, автопереключение на обход белых списков
 
 ## Happ crypt (`happ://crypt…`)
 
@@ -23,7 +22,7 @@
 
 ## Скачать
 
-После публикации релизов: **GitHub → Releases** (Setup.exe + portable zip).
+**[Releases](https://github.com/Nikita34196/happ-accessible/releases)** — Setup.exe и portable zip.
 
 ## Сборка локально
 
@@ -45,13 +44,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.6` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
-
-Опубликовать релиз:
+| **Release** | тег `v0.3.7` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.6
-git push origin v0.3.6
+git tag v0.3.7
+git push origin v0.3.7
 ```
 
 ## Клавиши
@@ -60,15 +57,12 @@ git push origin v0.3.6
 |---|---|
 | Alt, П | Меню подписки |
 | F5 | Обновить подписку |
-| Ctrl+Shift+C | Подключить |
-| Ctrl+Shift+D | Отключить |
-| Alt+G | Пинг |
+| Ctrl+Shift+C / Ctrl+Shift+D | Подключить или отключить |
+| F2 | Переименовать сервер |
+| Alt+H / Alt+G | Пинг выбранного / всех |
 | Alt+B | Проверить обход белых списков |
 | Alt+S | Сохранить |
-| Alt+A / Alt+M | Автоподключение / трей |
-| Alt+U / Alt+W | Автообновление / обход БС |
-| Alt+P / Alt+T | Прокси / TUN |
-| Enter в списке | Подключить |
+| Enter в списке | Подключить / отключить |
 
 При закрытии окна (если включено «Сворачивать в трей») приложение уходит в трей; полный выход — пункт **Выход** в меню значка.
 

@@ -96,35 +96,13 @@ public static class SingBoxConfigBuilder
         {
             finalOutbound = "direct";
             dnsFinal = "dns-local";
-            if (routing.Domains.Count > 0)
-            {
-                rules.Add(new Dictionary<string, object?>
-                {
-                    ["domain_suffix"] = routing.Domains.ToArray(),
-                    ["outbound"] = "proxy"
-                });
-                dnsRules =
-                [
-                    new Dictionary<string, object?>
-                    {
-                        ["domain_suffix"] = routing.Domains.ToArray(),
-                        ["server"] = "dns-remote"
-                    }
-                ];
-            }
+            AppendDomainAndRuleSetRules(routing.Domains, outbound: "proxy", rules, ref ruleSets, ref dnsRules, dnsServer: "dns-remote");
         }
         else if (routing.Mode == RoutingMode.BypassList)
         {
             finalOutbound = "proxy";
             dnsFinal = "dns-remote";
-            if (routing.Domains.Count > 0)
-            {
-                rules.Add(new Dictionary<string, object?>
-                {
-                    ["domain_suffix"] = routing.Domains.ToArray(),
-                    ["outbound"] = "direct"
-                });
-            }
+            AppendDomainAndRuleSetRules(routing.Domains, outbound: "direct", rules, ref ruleSets, ref dnsRules, dnsServer: null);
         }
         else if (routing.Mode == RoutingMode.BypassRu)
         {
@@ -285,6 +263,89 @@ public static class SingBoxConfigBuilder
         return JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
     }
 
+    private static void AppendDomainAndRuleSetRules(
+        IReadOnlyList<string> entries,
+        string outbound,
+        List<object> rules,
+        ref List<object>? ruleSets,
+        ref List<object>? dnsRules,
+        string? dnsServer)
+    {
+        var (domains, geosite, geoip) = RoutingOptions.SplitRoutingTags(entries);
+        if (domains.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["domain_suffix"] = domains.ToArray(),
+                ["outbound"] = outbound
+            });
+            if (dnsServer is not null)
+            {
+                dnsRules ??= [];
+                dnsRules.Add(new Dictionary<string, object?>
+                {
+                    ["domain_suffix"] = domains.ToArray(),
+                    ["server"] = dnsServer
+                });
+            }
+        }
+
+        ruleSets ??= [];
+        var geositeTags = new List<string>();
+        foreach (var tag in geosite)
+        {
+            var rsTag = "geosite-" + tag.Replace(':', '-');
+            geositeTags.Add(rsTag);
+            if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))
+            {
+                ruleSets.Add(RemoteRuleSet(rsTag,
+                    $"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-{tag}.srs"));
+            }
+        }
+
+        var geoipTags = new List<string>();
+        foreach (var tag in geoip)
+        {
+            var rsTag = "geoip-" + tag.Replace(':', '-');
+            geoipTags.Add(rsTag);
+            if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))
+            {
+                ruleSets.Add(RemoteRuleSet(rsTag,
+                    $"https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-{tag}.srs"));
+            }
+        }
+
+        if (geositeTags.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["rule_set"] = geositeTags.ToArray(),
+                ["outbound"] = outbound
+            });
+            if (dnsServer is not null)
+            {
+                dnsRules ??= [];
+                dnsRules.Add(new Dictionary<string, object?>
+                {
+                    ["rule_set"] = geositeTags.ToArray(),
+                    ["server"] = dnsServer
+                });
+            }
+        }
+
+        if (geoipTags.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["rule_set"] = geoipTags.Count == 1 ? geoipTags[0] : geoipTags.ToArray(),
+                ["outbound"] = outbound
+            });
+        }
+
+        if (ruleSets.Count == 0)
+            ruleSets = null;
+    }
+
     private static Dictionary<string, object?> RemoteRuleSet(string tag, string url) =>
         new()
         {
@@ -318,6 +379,8 @@ public static class SingBoxConfigBuilder
             "vless" => BuildVless(uri),
             "trojan" => BuildTrojan(uri),
             "hysteria2" => BuildHysteria2(uri),
+            "hysteria" => BuildHysteria1(uri),
+            "wireguard" => BuildWireGuard(uri),
             "ss" => BuildShadowsocks(uri),
             "vmess" => BuildVmess(uri),
             _ => null
@@ -502,6 +565,92 @@ public static class SingBoxConfigBuilder
                 ["server_name"] = sni,
                 ["insecure"] = insecure is "1" or "true"
             }
+        };
+    }
+
+    private static Dictionary<string, object?> BuildHysteria1(string uri)
+    {
+        // hysteria://host:port?auth=...&peer=sni&insecure=1&upmbps=&downmbps=
+        var normalized = uri.Replace("hysteria://", "https://", StringComparison.OrdinalIgnoreCase);
+        var hash = normalized.IndexOf('#');
+        if (hash >= 0)
+            normalized = normalized[..hash];
+        var u = new Uri(normalized);
+        var q = ParseQuery(u.Query);
+        var auth = Q(q, "auth") ?? Q(q, "auth_str") ?? Uri.UnescapeDataString(u.UserInfo);
+        if (string.IsNullOrWhiteSpace(auth))
+            throw new InvalidOperationException("Hysteria: в ссылке нет auth.");
+        var sni = Q(q, "peer") ?? Q(q, "sni") ?? u.IdnHost;
+        _ = int.TryParse(Q(q, "upmbps") ?? "50", out var up);
+        _ = int.TryParse(Q(q, "downmbps") ?? "200", out var down);
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "hysteria",
+            ["tag"] = "proxy",
+            ["server"] = u.IdnHost,
+            ["server_port"] = u.Port == -1 ? 443 : u.Port,
+            ["up_mbps"] = Math.Max(1, up),
+            ["down_mbps"] = Math.Max(1, down),
+            ["auth_str"] = auth,
+            ["tls"] = new Dictionary<string, object?>
+            {
+                ["enabled"] = true,
+                ["server_name"] = sni,
+                ["insecure"] = Q(q, "insecure") is "1" or "true"
+            }
+        };
+    }
+
+    private static Dictionary<string, object?> BuildWireGuard(string uri)
+    {
+        // wireguard://PRIVATEKEY@server:port?publickey=...&address=10.0.0.2/32&mtu=...&reserved=...
+        var withoutScheme = uri;
+        if (withoutScheme.StartsWith("wg://", StringComparison.OrdinalIgnoreCase))
+            withoutScheme = "wireguard://" + withoutScheme["wg://".Length..];
+        var hash = withoutScheme.IndexOf('#');
+        if (hash >= 0)
+            withoutScheme = withoutScheme[..hash];
+
+        var asHttps = withoutScheme.Replace("wireguard://", "https://", StringComparison.OrdinalIgnoreCase);
+        var u = new Uri(asHttps);
+        var q = ParseQuery(u.Query);
+        var privateKey = Uri.UnescapeDataString(u.UserInfo);
+        var publicKey = Q(q, "publickey") ?? Q(q, "publicKey") ?? Q(q, "peerpublickey");
+        if (string.IsNullOrWhiteSpace(privateKey) || string.IsNullOrWhiteSpace(publicKey))
+            throw new InvalidOperationException("WireGuard: нужны private key и publickey.");
+
+        var address = Q(q, "address") ?? Q(q, "ip") ?? "10.0.0.2/32";
+        var localAddresses = address.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        _ = int.TryParse(Q(q, "mtu") ?? "1420", out var mtu);
+
+        var peer = new Dictionary<string, object?>
+        {
+            ["server"] = u.IdnHost,
+            ["server_port"] = u.Port == -1 ? 51820 : u.Port,
+            ["public_key"] = publicKey,
+            ["allowed_ips"] = new[] { "0.0.0.0/0", "::/0" }
+        };
+        var psk = Q(q, "presharedkey") ?? Q(q, "psk");
+        if (psk is not null)
+            peer["pre_shared_key"] = psk;
+        if (Q(q, "reserved") is { } reserved)
+        {
+            var bytes = reserved.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Select(s => byte.TryParse(s, out var b) ? b : (byte)0)
+                .ToArray();
+            if (bytes.Length > 0)
+                peer["reserved"] = bytes;
+        }
+
+        // AmneziaWG obfuscation params (Jc/Jmin/Jmax/S1/S2/H1-H4) → use AmneziaWG path instead when present
+        return new Dictionary<string, object?>
+        {
+            ["type"] = "wireguard",
+            ["tag"] = "proxy",
+            ["private_key"] = privateKey,
+            ["local_address"] = localAddresses,
+            ["mtu"] = Math.Clamp(mtu, 1280, 1500),
+            ["peers"] = new object[] { peer }
         };
     }
 

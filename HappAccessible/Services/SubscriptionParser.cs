@@ -9,7 +9,8 @@ public static class SubscriptionParser
     private static readonly string[] Schemes =
     [
         "vless://", "vmess://", "trojan://", "ss://",
-        "hysteria2://", "hy2://"
+        "hysteria2://", "hy2://", "hysteria://",
+        "wireguard://", "wg://"
     ];
 
     public static IReadOnlyList<ServerProfile> Parse(string content)
@@ -18,6 +19,14 @@ public static class SubscriptionParser
             return [];
 
         var text = content.Trim();
+
+        // Clash / Clash Meta YAML
+        if (ClashYamlParser.LooksLikeClash(text))
+        {
+            var clash = ClashYamlParser.Parse(text);
+            if (clash.Count > 0)
+                return clash;
+        }
 
         // Whole body may be base64 of newline-separated URIs
         if (!LooksLikeUriList(text))
@@ -41,6 +50,9 @@ public static class SubscriptionParser
 
         return result;
     }
+
+    /// <summary>Public entry for Clash converter and tests.</summary>
+    public static ServerProfile? ParseLinePublic(string line) => ParseLine(line);
 
     /// <summary>
     /// Remnawave / Geodema returns a fake "App not supported" node when HWID is missing
@@ -126,6 +138,25 @@ public static class SubscriptionParser
                 var hostPort = rest[(at + 1)..];
                 (host, port) = SplitHostPort(hostPort);
             }
+            else if (scheme is "hysteria")
+            {
+                // hysteria://host:port?auth=...  (auth may also be in userinfo)
+                var q = rest.IndexOf('?');
+                var hostPart = q >= 0 ? rest[..q] : rest;
+                var at = hostPart.IndexOf('@');
+                if (at >= 0)
+                    hostPart = hostPart[(at + 1)..];
+                (host, port) = SplitHostPort(hostPart);
+            }
+            else if (scheme is "wireguard" or "wg")
+            {
+                var at = rest.LastIndexOf('@');
+                var hostPart = at >= 0 ? rest[(at + 1)..] : rest;
+                var q = hostPart.IndexOf('?');
+                if (q >= 0)
+                    hostPart = hostPart[..q];
+                (host, port) = SplitHostPort(hostPart);
+            }
             else
             {
                 // user@host:port?query
@@ -137,7 +168,12 @@ public static class SubscriptionParser
                 (host, port) = SplitHostPort(hostPart);
             }
 
-            var proto = scheme is "hy2" ? "hysteria2" : scheme;
+            var proto = scheme switch
+            {
+                "hy2" => "hysteria2",
+                "wg" => "wireguard",
+                _ => scheme
+            };
             name ??= $"{proto}://{host}:{port}";
 
             return new ServerProfile
@@ -164,7 +200,6 @@ public static class SubscriptionParser
             if (pad != 0)
                 b64 = b64.PadRight(b64.Length + (4 - pad), '=');
             var json = Encoding.UTF8.GetString(Convert.FromBase64String(b64));
-            // minimal parse without System.Text.Json dependency gymnastics
             var name = ExtractJsonString(json, "ps") ?? ExtractJsonString(json, "remark") ?? "VMess";
             var host = ExtractJsonString(json, "add") ?? ExtractJsonString(json, "host");
             var portStr = ExtractJsonString(json, "port") ?? "0";

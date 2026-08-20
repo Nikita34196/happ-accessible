@@ -16,7 +16,7 @@ public sealed class XrayRunner : IDisposable
     private static HttpClient CreateHttp()
     {
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/0.3");
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + AppUpdateService.GetCurrentVersion());
         return http;
     }
 
@@ -198,31 +198,14 @@ public sealed class XrayRunner : IDisposable
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 
-        await Task.Delay(900, ct).ConfigureAwait(false);
+        await ConnectivityProbe.WaitForProcessReadyAsync(_process, TimeSpan.FromSeconds(2), ct)
+            .ConfigureAwait(false);
         if (_process.HasExited)
             throw new InvalidOperationException($"Xray сразу завершился (код {_process.ExitCode}). {RecentLog}");
     }
 
-    public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default)
-    {
-        try
-        {
-            var handler = new HttpClientHandler
-            {
-                Proxy = new WebProxy($"http://127.0.0.1:{_activePort}"),
-                UseProxy = true,
-                ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-            };
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
-            using var resp = await client.GetAsync("http://www.gstatic.com/generate_204", ct)
-                .ConfigureAwait(false);
-            return (int)resp.StatusCode is 204 or 200 or 301 or 302;
-        }
-        catch
-        {
-            return false;
-        }
-    }
+    public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default) =>
+        await ConnectivityProbe.ProbeHttpViaProxyAsync(_activePort, ct).ConfigureAwait(false);
 
     public async Task StopAsync()
     {

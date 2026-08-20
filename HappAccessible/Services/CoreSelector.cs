@@ -23,7 +23,10 @@ public static class CoreSelector
         }
 
         if (string.Equals(server.Protocol, "hysteria2", StringComparison.OrdinalIgnoreCase)
-            || string.Equals(server.Protocol, "hy2", StringComparison.OrdinalIgnoreCase))
+            || string.Equals(server.Protocol, "hy2", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(server.Protocol, "hysteria", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(server.Protocol, "wireguard", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(server.Protocol, "wg", StringComparison.OrdinalIgnoreCase))
             return ProxyCoreKind.SingBox;
 
         if (preference == ProxyCoreKind.SingBox)

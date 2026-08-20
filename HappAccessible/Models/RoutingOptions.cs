@@ -36,6 +36,17 @@ public sealed class RoutingOptions
             if (line.Length == 0 || line.StartsWith('#'))
                 continue;
 
+            // Keep geosite:/geoip:/rule-set: tags as-is for SingBoxConfigBuilder
+            if (line.StartsWith("geosite:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("geoip:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("rule-set:", StringComparison.OrdinalIgnoreCase)
+                || line.StartsWith("ruleset:", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!list.Contains(line, StringComparer.OrdinalIgnoreCase))
+                    list.Add(line);
+                continue;
+            }
+
             line = line.Replace("https://", "", StringComparison.OrdinalIgnoreCase)
                        .Replace("http://", "", StringComparison.OrdinalIgnoreCase);
             var slash = line.IndexOf('/');
@@ -47,6 +58,48 @@ public sealed class RoutingOptions
         }
 
         return list;
+    }
+
+    public static (IReadOnlyList<string> Domains, IReadOnlyList<string> GeoSite, IReadOnlyList<string> GeoIp)
+        SplitRoutingTags(IReadOnlyList<string> entries)
+    {
+        var domains = new List<string>();
+        var geosite = new List<string>();
+        var geoip = new List<string>();
+        foreach (var e in entries)
+        {
+            if (e.StartsWith("geosite:", StringComparison.OrdinalIgnoreCase))
+            {
+                var tag = e["geosite:".Length..].Trim();
+                if (tag.Length > 0)
+                    geosite.Add(tag);
+            }
+            else if (e.StartsWith("geoip:", StringComparison.OrdinalIgnoreCase))
+            {
+                var tag = e["geoip:".Length..].Trim();
+                if (tag.Length > 0)
+                    geoip.Add(tag);
+            }
+            else if (e.StartsWith("rule-set:", StringComparison.OrdinalIgnoreCase)
+                     || e.StartsWith("ruleset:", StringComparison.OrdinalIgnoreCase))
+            {
+                var rest = e[(e.IndexOf(':') + 1)..].Trim();
+                // Prefer treating as geosite tag unless it looks like geoip-
+                if (rest.StartsWith("geoip-", StringComparison.OrdinalIgnoreCase)
+                    || rest.StartsWith("geoip_", StringComparison.OrdinalIgnoreCase))
+                    geoip.Add(rest.Contains(':') ? rest[(rest.IndexOf(':') + 1)..] : rest.Replace("geoip-", "", StringComparison.OrdinalIgnoreCase));
+                else if (rest.StartsWith("geosite-", StringComparison.OrdinalIgnoreCase))
+                    geosite.Add(rest["geosite-".Length..]);
+                else
+                    geosite.Add(rest);
+            }
+            else
+            {
+                domains.Add(e);
+            }
+        }
+
+        return (domains, geosite, geoip);
     }
 
     /// <summary>Process names for sing-box process_name (e.g. chrome.exe).</summary>

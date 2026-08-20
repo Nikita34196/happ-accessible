@@ -4,6 +4,7 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using HappAccessible.Models;
 
 namespace HappAccessible.Services;
 
@@ -101,6 +102,8 @@ public sealed class SubscriptionFetcher
                 }
 
                 settings.LastSuccessfulUserAgent = ua;
+                ApplyUserInfo(settings, response);
+                settings.SubscriptionLastUpdateUtc = DateTimeOffset.UtcNow;
                 settings.Save();
                 SaveCache(input, body);
                 return body;
@@ -136,6 +139,44 @@ public sealed class SubscriptionFetcher
         if (!IsHttpUrl(input))
             return null;
         return TryLoadCache(input, TimeSpan.FromHours(24));
+    }
+
+    public static DateTimeOffset? TryGetCacheTimestamp(string urlOrContent)
+    {
+        var input = NormalizeInput(urlOrContent);
+        if (!IsHttpUrl(input))
+            return null;
+        try
+        {
+            var meta = CachePath(input) + ".meta";
+            if (!File.Exists(meta))
+                return null;
+            return DateTimeOffset.TryParse(File.ReadAllText(meta), out var when) ? when : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static void ApplyUserInfo(AppSettings settings, HttpResponseMessage response)
+    {
+        string? raw = null;
+        if (response.Headers.TryGetValues("subscription-userinfo", out var a))
+            raw = a.FirstOrDefault();
+        else if (response.Headers.TryGetValues("Subscription-Userinfo", out var b))
+            raw = b.FirstOrDefault();
+        else if (response.Content.Headers.TryGetValues("subscription-userinfo", out var c))
+            raw = c.FirstOrDefault();
+
+        var info = SubscriptionUserInfo.Parse(raw);
+        if (info is null)
+            return;
+
+        settings.SubscriptionUploadBytes = info.UploadBytes;
+        settings.SubscriptionDownloadBytes = info.DownloadBytes;
+        settings.SubscriptionTotalBytes = info.TotalBytes;
+        settings.SubscriptionExpireUnix = info.ExpireUnix > 0 ? info.ExpireUnix : null;
     }
 
     private static void SaveCache(string url, string body)

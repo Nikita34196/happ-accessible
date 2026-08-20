@@ -37,11 +37,28 @@ public sealed class AppSettings
     public string ProxyCore { get; set; } = "auto";
     /// <summary>On startup, check GitHub releases and download newer cores when idle.</summary>
     public bool AutoUpdateCores { get; set; } = true;
+    /// <summary>On startup, check GitHub Releases for a newer Happ Accessible build.</summary>
+    public bool AutoUpdateApp { get; set; } = true;
+    public DateTime? LastAppCheckUtc { get; set; }
     public DateTime? LastCoreCheckUtc { get; set; }
     /// <summary>
     /// If the current tunnel dies (or connect fails), try RU / whitelist-bypass servers automatically.
     /// </summary>
     public bool AutoWhitelistFailover { get; set; } = true;
+
+    /// <summary>Custom display names keyed by RawUri.</summary>
+    public Dictionary<string, string> ServerNameOverrides { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>Last successful subscription fetch (UTC).</summary>
+    public DateTimeOffset? SubscriptionLastUpdateUtc { get; set; }
+    /// <summary>Upload bytes from subscription-userinfo header.</summary>
+    public long? SubscriptionUploadBytes { get; set; }
+    /// <summary>Download bytes from subscription-userinfo header.</summary>
+    public long? SubscriptionDownloadBytes { get; set; }
+    /// <summary>Total traffic quota bytes (0 = unlimited / unknown).</summary>
+    public long? SubscriptionTotalBytes { get; set; }
+    /// <summary>Unix expiry from subscription-userinfo (seconds).</summary>
+    public long? SubscriptionExpireUnix { get; set; }
 
     private static string SettingsPath =>
         Path.Combine(
@@ -63,7 +80,9 @@ public sealed class AppSettings
             if (!File.Exists(path))
                 return new AppSettings();
             var json = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            loaded.ServerNameOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            return loaded;
         }
         catch
         {

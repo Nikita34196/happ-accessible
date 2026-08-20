@@ -21,8 +21,8 @@ public sealed class TrayMenuSnapshot
 }
 
 /// <summary>
-/// System tray icon with a Vireo/Clash-style menu: show, connect/disconnect,
-/// nested server list (pick &amp; connect), refresh subscription, exit.
+/// System tray icon with a Vireo/Clash-style menu: show, connect/disconnect toggle,
+/// connection check, nested server list, refresh subscription, exit.
 /// Menu is rebuilt on each open so checks stay current.
 /// </summary>
 public sealed class TrayService : IDisposable
@@ -35,11 +35,12 @@ public sealed class TrayService : IDisposable
 
     public Func<TrayMenuSnapshot>? SnapshotProvider { get; set; }
 
-    public event Action? ConnectRequested;
-    public event Action? DisconnectRequested;
+    public event Action? ConnectToggleRequested;
+    public event Action? CheckConnectionRequested;
     public event Action? ShowRequested;
     public event Action? ExitRequested;
     public event Action? RefreshSubscriptionRequested;
+    public event Action? PingAllRequested;
     public event Action<string>? ServerConnectRequested;
 
     public TrayService(Window window)
@@ -106,11 +107,14 @@ public sealed class TrayService : IDisposable
             AddItem(_menu.Items, "Показать окно", () => ShowRequested?.Invoke());
             _menu.Items.Add(new ToolStripSeparator());
 
-            var connect = AddItem(_menu.Items, "Подключить выбранный", () => ConnectRequested?.Invoke());
-            connect.Enabled = snap.Servers.Count > 0 && !snap.IsConnected;
+            var toggleLabel = snap.IsConnected ? "Отключить" : "Подключить выбранный";
+            var toggle = AddItem(_menu.Items, toggleLabel, () => ConnectToggleRequested?.Invoke());
+            toggle.Enabled = snap.IsConnected || snap.Servers.Count > 0;
 
-            var disconnect = AddItem(_menu.Items, "Отключить", () => DisconnectRequested?.Invoke());
-            disconnect.Enabled = snap.IsConnected;
+            var check = AddItem(_menu.Items, "Проверить соединение", () => CheckConnectionRequested?.Invoke());
+            check.Enabled = snap.IsConnected;
+
+            AddItem(_menu.Items, "Пинг всех серверов", () => PingAllRequested?.Invoke());
 
             _menu.Items.Add(new ToolStripSeparator());
 
@@ -142,7 +146,6 @@ public sealed class TrayService : IDisposable
             truncated = true;
         }
 
-        // Group by protocol when there are many nodes (like multi-core trays).
         var useGroups = list.Count > 12;
         if (useGroups)
         {

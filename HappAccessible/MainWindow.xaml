@@ -22,6 +22,8 @@
                           InputGestureText="F5"
                           AutomationProperties.Name="Обновить подписку" />
                 <Separator />
+                <MenuItem Header="Импорт списка _доменов из URL…" Click="MenuImportDomainListUrl_OnClick"
+                          AutomationProperties.Name="Импорт списка доменов или GeoSite из URL" />
                 <MenuItem Header="AmneziaWG: импорт из ф_айла…" Click="MenuImportAwgFile_OnClick"
                           AutomationProperties.Name="Импорт AmneziaWG из файла" />
                 <MenuItem Header="AmneziaWG: импорт из б_уфера" Click="MenuImportAwgClipboard_OnClick"
@@ -30,6 +32,8 @@
             <MenuItem Header="_Справка" AutomationProperties.Name="Справка">
                 <MenuItem Header="Проверить _обновления ядер" Click="MenuCheckCoreUpdates_OnClick"
                           AutomationProperties.Name="Проверить обновления ядер" />
+                <MenuItem Header="Проверить обновление _приложения" Click="MenuCheckAppUpdate_OnClick"
+                          AutomationProperties.Name="Проверить обновление приложения через GitHub" />
                 <MenuItem Header="_О программе" Click="MenuAbout_OnClick"
                           AutomationProperties.Name="О программе" />
             </MenuItem>
@@ -52,9 +56,14 @@
                        Text="Подписка не задана. Alt, затем П — меню подписки." />
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
+                <Button x:Name="PingSelectedButton"
+                        Content="Пинг выбранного (_H)"
+                        MinWidth="140" MinHeight="32" Margin="0,0,8,0"
+                        Click="PingSelectedButton_OnClick"
+                        AutomationProperties.Name="Пинг выбранного сервера" />
                 <Button x:Name="PingButton"
-                        Content="Пинг (_G)"
-                        MinWidth="100" MinHeight="32" Margin="0,0,8,0"
+                        Content="Пинг всех (_G)"
+                        MinWidth="110" MinHeight="32" Margin="0,0,8,0"
                         Click="PingButton_OnClick"
                         AutomationProperties.Name="Пинг всех серверов" />
                 <Button x:Name="CheckWhitelistButton"
@@ -63,18 +72,12 @@
                         Click="CheckWhitelistButton_OnClick"
                         AutomationProperties.Name="Проверить серверы обхода белых списков"
                         AutomationProperties.HelpText="Показывает, есть ли в подписке серверы для обхода белых списков провайдера" />
-                <Button x:Name="ConnectButton"
+                <Button x:Name="ConnectToggleButton"
                         Content="Подключить (Ctrl+Shift+C)"
-                        MinWidth="200" MinHeight="32" Margin="0,0,8,0"
-                        Click="ConnectButton_OnClick"
-                        AutomationProperties.Name="Подключить выбранный сервер"
-                        AutomationProperties.HelpText="Горячая клавиша Ctrl+Shift+C" />
-                <Button x:Name="DisconnectButton"
-                        Content="Отключить (Ctrl+Shift+D)"
-                        MinWidth="200" MinHeight="32" Margin="0,0,8,0"
-                        Click="DisconnectButton_OnClick"
-                        AutomationProperties.Name="Отключить прокси"
-                        AutomationProperties.HelpText="Горячая клавиша Ctrl+Shift+D" />
+                        MinWidth="220" MinHeight="32" Margin="0,0,8,0"
+                        Click="ConnectToggleButton_OnClick"
+                        AutomationProperties.Name="Подключить или отключить"
+                        AutomationProperties.HelpText="Одна кнопка: подключить выбранный сервер или отключить. Горячая клавиша Ctrl+Shift+C" />
                 <Button x:Name="SaveButton"
                         Content="Сохранить (_S)"
                         MinWidth="110" MinHeight="32"
@@ -144,10 +147,18 @@
                 <CheckBox x:Name="AutoUpdateCoresCheck"
                           Content="Автообновление ядер (_K)"
                           IsChecked="True"
+                          Margin="0,0,16,0"
                           Checked="SettingsControl_Changed"
                           Unchecked="SettingsControl_Changed"
                           AutomationProperties.Name="Автообновление ядер sing-box, Xray и AmneziaWG"
                           AutomationProperties.HelpText="При старте сверяет GitHub releases и скачивает новые версии, если не подключены" />
+                <CheckBox x:Name="AutoUpdateAppCheck"
+                          Content="Автообновление приложения (_R)"
+                          IsChecked="True"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Автообновление Happ Accessible с GitHub"
+                          AutomationProperties.HelpText="Проверяет Releases репозитория и предлагает установить новую версию" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -198,7 +209,7 @@
             </ComboBox>
 
             <Label x:Name="DomainListLabel"
-                   Content="Список сайтов (по одному в строке), например youtube.com"
+                   Content="Список сайтов (по одному в строке). Можно: youtube.com, geosite:google, geoip:cn"
                    Target="{Binding ElementName=DomainListBox}"
                    Margin="0,8,0,0"
                    AutomationProperties.Name="Подпись списка сайтов" />
@@ -208,6 +219,7 @@
                      AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto"
                      AutomationProperties.Name="Список сайтов для режима маршрутизации"
+                     AutomationProperties.HelpText="Домены или теги geosite:/geoip: с GitHub SagerNet rule-set"
                      LostFocus="SettingsControl_Changed" />
 
             <Label x:Name="AppListLabel"
@@ -231,9 +243,19 @@
                      Height="200"
                      DisplayMemberPath="DisplayName"
                      AutomationProperties.Name="Список серверов"
-                     AutomationProperties.HelpText="Стрелки — выбор, Enter или Ctrl+Shift+C — подключить"
+                     AutomationProperties.HelpText="Стрелки — выбор, Enter — подключить, F2 — переименовать, Ctrl+Shift+C — подключить/отключить"
                      KeyDown="ServerList_OnKeyDown"
-                     SelectionChanged="ServerList_OnSelectionChanged" />
+                     SelectionChanged="ServerList_OnSelectionChanged">
+                <ListBox.ContextMenu>
+                    <ContextMenu>
+                        <MenuItem Header="Пинг этого сервера" Click="MenuPingSelected_OnClick" />
+                        <MenuItem Header="Переименовать…" Click="MenuRenameServer_OnClick" />
+                        <MenuItem Header="Сбросить имя" Click="MenuResetServerName_OnClick" />
+                        <Separator />
+                        <MenuItem Header="Подключить / отключить" Click="ConnectToggleButton_OnClick" />
+                    </ContextMenu>
+                </ListBox.ContextMenu>
+            </ListBox>
         </StackPanel>
     </DockPanel>
 </Window>

@@ -18,6 +18,7 @@ public partial class MainWindow : Window
     private readonly AmneziaWgRunner _awg = new();
     private readonly SystemProxyService _proxy = new();
     private readonly CoreUpdateService _coreUpdates = new();
+    private readonly AppUpdateService _appUpdates = new();
     private readonly List<ServerProfile> _servers = [];
     private readonly AppSettings _settings;
     private TrayService? _tray;
@@ -81,6 +82,7 @@ public partial class MainWindow : Window
         SelectTunStack(_settings.TunStack);
         SelectProxyCore(_settings.ProxyCore);
         AutoUpdateCoresCheck.IsChecked = _settings.AutoUpdateCores;
+        AutoUpdateAppCheck.IsChecked = _settings.AutoUpdateApp;
         SelectRoutingMode(_settings.RoutingMode);
         UpdateDomainListVisibility();
         UpdateSubscriptionInfo();
@@ -92,8 +94,9 @@ public partial class MainWindow : Window
         _tray = new TrayService(this);
         _tray.SnapshotProvider = BuildTraySnapshot;
         _tray.ShowRequested += () => Dispatcher.Invoke(() => _tray.ShowWindow());
-        _tray.ConnectRequested += () => Dispatcher.InvokeAsync(async () => await ConnectAsync());
-        _tray.DisconnectRequested += () => Dispatcher.InvokeAsync(async () => await DisconnectAsync());
+        _tray.ConnectToggleRequested += () => Dispatcher.InvokeAsync(async () => await ConnectToggleAsync());
+        _tray.CheckConnectionRequested += () => Dispatcher.InvokeAsync(async () => await CheckConnectionAsync());
+        _tray.PingAllRequested += () => Dispatcher.InvokeAsync(async () => await PingAllServersAsync());
         _tray.RefreshSubscriptionRequested += () => Dispatcher.InvokeAsync(async () =>
         {
             await LoadSubscriptionAsync(announce: true);
@@ -103,6 +106,7 @@ public partial class MainWindow : Window
             await ConnectServerFromTrayAsync(uri));
         _tray.ExitRequested += () => Dispatcher.Invoke(ExitApp);
         _tray.SetTooltip("Happ Accessible — не подключено");
+        UpdateConnectToggleUi();
 
         // Recover from crash: leftover system proxy / AmneziaWG tunnel
         _proxy.ClearStaleOwnedProxy(_settings.MixedPort, EngineOptions.DefaultMixedPort, 10808);
@@ -169,6 +173,123 @@ public partial class MainWindow : Window
             _tray.HideWindowToTray();
 
         _ = CheckAndUpdateCoresOnStartupAsync();
+        _ = CheckAndUpdateAppOnStartupAsync();
+    }
+
+    private async Task CheckAndUpdateAppOnStartupAsync()
+    {
+        try
+        {
+            if (_settings.LastAppCheckUtc is { } last
+                && DateTime.UtcNow - last < TimeSpan.FromHours(6))
+                return;
+
+            SetStatus("Проверка обновления приложения (GitHub)…");
+            var info = await _appUpdates.CheckAsync();
+            _settings.LastAppCheckUtc = DateTime.UtcNow;
+            PersistSettings();
+
+            if (!info.UpdateAvailable)
+                return;
+
+            if (!_settings.AutoUpdateApp)
+            {
+                SetStatus(
+                    $"Доступна версия {info.LatestVersion} (сейчас {info.CurrentVersion}). " +
+                    "Справка → Проверить обновление приложения.");
+                _tray?.Notify($"Доступно обновление {info.LatestVersion}");
+                return;
+            }
+
+            if (_connectedServer is not null || _connectBusy || _awgConnected)
+            {
+                SetStatus(
+                    $"Доступна версия {info.LatestVersion} (отложено: есть подключение). " +
+                    "Отключитесь и: Справка → Проверить обновление приложения.");
+                return;
+            }
+
+            await ApplyAppUpdateAsync(info, announce: true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Проверка приложения не удалась: " + ex.Message);
+        }
+    }
+
+    private async void MenuCheckAppUpdate_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SetStatus("Проверка обновления приложения…");
+            var info = await _appUpdates.CheckAsync();
+            _settings.LastAppCheckUtc = DateTime.UtcNow;
+            PersistSettings();
+            if (!info.UpdateAvailable)
+            {
+                SetStatus($"Уже последняя версия: {info.CurrentVersion}.");
+                return;
+            }
+
+            await ApplyAppUpdateAsync(info, announce: true);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Обновление приложения: " + ex.Message);
+        }
+    }
+
+    private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool announce)
+    {
+        var progress = new Progress<string>(SetStatus);
+        if (AppUpdateService.IsRunningFromInstallDir() && !string.IsNullOrEmpty(info.SetupExeUrl))
+        {
+            var setup = await _appUpdates.DownloadSetupAsync(info, progress);
+            var answer = System.Windows.MessageBox.Show(
+                this,
+                $"Скачан установщик {info.LatestVersion}.\nЗапустить сейчас? Приложение закроется.",
+                "Обновление Happ Accessible",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                SetStatus($"Установщик сохранён: {setup}");
+                return;
+            }
+
+            AppUpdateService.LaunchSetup(setup);
+            _exitRequested = true;
+            Cleanup(persistFromUi: false);
+            System.Windows.Application.Current.Shutdown();
+            return;
+        }
+
+        if (string.IsNullOrEmpty(info.PortableZipUrl))
+        {
+            SetStatus($"Обновление {info.LatestVersion}: скачайте вручную — {info.ReleaseUrl}");
+            return;
+        }
+
+        var script = await _appUpdates.PreparePortableUpdateAsync(info, progress);
+        if (announce)
+        {
+            var answer = System.Windows.MessageBox.Show(
+                this,
+                $"Готово обновление до {info.LatestVersion}.\nПерезапустить приложение сейчас?",
+                "Обновление Happ Accessible",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (answer != MessageBoxResult.Yes)
+            {
+                SetStatus($"Обновление подготовлено. Запустите позже: {script}");
+                return;
+            }
+        }
+
+        AppUpdateService.LaunchUpdaterScript(script);
+        _exitRequested = true;
+        Cleanup(persistFromUi: false);
+        System.Windows.Application.Current.Shutdown();
     }
 
     private async Task CheckAndUpdateCoresOnStartupAsync()
@@ -419,6 +540,7 @@ public partial class MainWindow : Window
         _servers.RemoveAll(s => s.Protocol == "amneziawg");
         foreach (var cfg in AmneziaWgConfigStore.ListImported())
             _servers.Add(cfg.ToProfile());
+        ApplyNameOverrides();
         RefreshServerList();
     }
 
@@ -434,15 +556,10 @@ public partial class MainWindow : Window
         if (Keyboard.Modifiers != (ModifierKeys.Control | ModifierKeys.Shift))
             return;
 
-        if (e.Key == Key.C)
+        if (e.Key is Key.C or Key.D)
         {
             e.Handled = true;
-            _ = ConnectAsync(allowFailover: true);
-        }
-        else if (e.Key == Key.D)
-        {
-            e.Handled = true;
-            _ = DisconnectAsync();
+            _ = ConnectToggleAsync();
         }
     }
 
@@ -558,9 +675,11 @@ public partial class MainWindow : Window
 
     private void MenuAbout_OnClick(object sender, RoutedEventArgs e)
     {
+        var ver = AppUpdateService.GetCurrentVersion();
         SetStatus(
-            "Happ Accessible 0.3.6 — dual-core + меню серверов в трее. " +
-            "Ctrl+Shift+C/D — подключить/отключить. ПКМ по значку → Серверы.");
+            $"Happ Accessible {ver}. Ядра: sing-box / Xray / AmneziaWG. " +
+            "Ctrl+Shift+C — подключить или отключить. F2 — переименовать сервер. " +
+            "ПКМ по значку трея — серверы и проверка связи.");
     }
 
     private void CheckWhitelistButton_OnClick(object sender, RoutedEventArgs e)
@@ -716,6 +835,7 @@ public partial class MainWindow : Window
         _servers.AddRange(parsed);
         foreach (var cfg in AmneziaWgConfigStore.ListImported())
             _servers.Add(cfg.ToProfile());
+        ApplyNameOverrides();
         RefreshServerList();
         SelectLastServer();
         // Keep previous URL if any; don't overwrite with huge body
@@ -775,6 +895,7 @@ public partial class MainWindow : Window
             _servers.AddRange(parsed);
             foreach (var cfg in AmneziaWgConfigStore.ListImported())
                 _servers.Add(cfg.ToProfile());
+            ApplyNameOverrides();
             RefreshServerList();
 
             _settings.SubscriptionInput = input;
@@ -815,6 +936,7 @@ public partial class MainWindow : Window
         if (SubscriptionInfoText is null)
             return;
 
+        var parts = new List<string>();
         var raw = _settings.SubscriptionInput?.Trim() ?? "";
         if (string.IsNullOrEmpty(raw))
         {
@@ -824,27 +946,127 @@ public partial class MainWindow : Window
 
         if (AmneziaWgConfigStore.LooksLikeConf(raw))
         {
-            SubscriptionInfoText.Text = "Сохранён текст AmneziaWG-конфига (скрыт). Меню: Alt, П.";
-            return;
+            parts.Add("Сохранён текст AmneziaWG-конфига (скрыт)");
         }
-
-        if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-            || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        else if (raw.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                 || raw.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
         {
             string host;
             try { host = new Uri(raw).Host; }
             catch { host = "ссылка"; }
-            SubscriptionInfoText.Text = $"Подписка сохранена ({host}). Ссылка скрыта. Обновить: F5 или меню.";
+            parts.Add($"Подписка: {host}");
+        }
+        else
+        {
+            var lines = raw.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
+            parts.Add(lines > 1
+                ? $"Подписка: список ({lines} строк)"
+                : "Подписка сохранена");
+        }
+
+        var updated = _settings.SubscriptionLastUpdateUtc
+                      ?? SubscriptionFetcher.TryGetCacheTimestamp(raw);
+        if (updated is not null)
+        {
+            var local = updated.Value.ToLocalTime();
+            parts.Add($"обновлена {local:dd.MM.yyyy HH:mm}");
+        }
+
+        var used = (_settings.SubscriptionUploadBytes ?? 0) + (_settings.SubscriptionDownloadBytes ?? 0);
+        var total = _settings.SubscriptionTotalBytes ?? 0;
+        if (used > 0 || total > 0)
+        {
+            if (total > 0)
+            {
+                var left = Math.Max(0, total - used);
+                parts.Add($"трафик {FormatBytes(used)} / {FormatBytes(total)} (осталось {FormatBytes(left)})");
+            }
+            else
+            {
+                parts.Add($"использовано {FormatBytes(used)}");
+            }
+        }
+
+        if (_settings.SubscriptionExpireUnix is > 0)
+        {
+            var exp = DateTimeOffset.FromUnixTimeSeconds(_settings.SubscriptionExpireUnix.Value).ToLocalTime();
+            var left = exp - DateTimeOffset.Now;
+            parts.Add(left.TotalSeconds > 0
+                ? $"действует до {exp:dd.MM.yyyy HH:mm} ({FormatDuration(left)})"
+                : $"срок истёк {exp:dd.MM.yyyy}");
+        }
+
+        parts.Add("F5 — обновить");
+        SubscriptionInfoText.Text = string.Join(". ", parts) + ".";
+    }
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024)
+            return $"{bytes} Б";
+        double v = bytes;
+        string[] units = ["КБ", "МБ", "ГБ", "ТБ"];
+        var i = -1;
+        do
+        {
+            v /= 1024;
+            i++;
+        } while (v >= 1024 && i < units.Length - 1);
+        return $"{v:0.##} {units[i]}";
+    }
+
+    private static string FormatDuration(TimeSpan t)
+    {
+        if (t.TotalDays >= 2)
+            return $"{(int)t.TotalDays} дн.";
+        if (t.TotalHours >= 2)
+            return $"{(int)t.TotalHours} ч";
+        return $"{Math.Max(1, (int)t.TotalMinutes)} мин";
+    }
+
+    private async void PingSelectedButton_OnClick(object sender, RoutedEventArgs e) =>
+        await PingSelectedServerAsync();
+
+    private async void MenuPingSelected_OnClick(object sender, RoutedEventArgs e) =>
+        await PingSelectedServerAsync();
+
+    private async void PingButton_OnClick(object sender, RoutedEventArgs e) =>
+        await PingAllServersAsync();
+
+    private async Task PingSelectedServerAsync()
+    {
+        if (ServerList.SelectedItem is not ServerProfile server)
+        {
+            SetStatus("Выберите сервер для пинга.");
             return;
         }
 
-        var lines = raw.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries).Length;
-        SubscriptionInfoText.Text = lines > 1
-            ? $"Подписка сохранена (список, строк: {lines}). Содержимое скрыто."
-            : "Подписка сохранена. Содержимое скрыто.";
+        _pingCts?.Cancel();
+        _pingCts = new CancellationTokenSource();
+        var ct = _pingCts.Token;
+        server.LatencyMs = -1;
+        RefreshServerList();
+        SetStatus($"Пинг «{server.Name}»…");
+        try
+        {
+            var ms = await PingService.PingAsync(server, ct);
+            server.LatencyMs = ms;
+            RefreshServerList();
+            SetStatus(ms is null
+                ? $"«{server.Name}»: нет ответа (TCP {server.Host}:{server.Port}, 3 с)."
+                : $"«{server.Name}»: {ms} мс.");
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus("Пинг отменён.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Ошибка пинга: " + ex.Message);
+        }
     }
 
-    private async void PingButton_OnClick(object sender, RoutedEventArgs e)
+    private async Task PingAllServersAsync()
     {
         if (_servers.Count == 0)
         {
@@ -895,10 +1117,207 @@ public partial class MainWindow : Window
         }
     }
 
-    private async void ConnectButton_OnClick(object sender, RoutedEventArgs e) =>
-        await ConnectAsync(allowFailover: true);
+    private async void ConnectToggleButton_OnClick(object sender, RoutedEventArgs e) =>
+        await ConnectToggleAsync();
 
-    private async void DisconnectButton_OnClick(object sender, RoutedEventArgs e) => await DisconnectAsync();
+    private async Task ConnectToggleAsync()
+    {
+        if (IsVpnConnected)
+            await DisconnectAsync();
+        else
+            await ConnectAsync(allowFailover: true);
+    }
+
+    private bool IsVpnConnected => _connectedServer is not null || _awgConnected;
+
+    private void UpdateConnectToggleUi()
+    {
+        if (ConnectToggleButton is null)
+            return;
+        if (IsVpnConnected)
+        {
+            ConnectToggleButton.Content = "Отключить (Ctrl+Shift+C)";
+            AutomationProperties.SetName(ConnectToggleButton, "Отключить прокси");
+            AutomationProperties.SetHelpText(ConnectToggleButton,
+                "Сейчас подключено. Нажмите, чтобы отключить. Горячая клавиша Ctrl+Shift+C");
+        }
+        else
+        {
+            ConnectToggleButton.Content = "Подключить (Ctrl+Shift+C)";
+            AutomationProperties.SetName(ConnectToggleButton, "Подключить выбранный сервер");
+            AutomationProperties.SetHelpText(ConnectToggleButton,
+                "Подключить выбранный сервер. Горячая клавиша Ctrl+Shift+C");
+        }
+    }
+
+    private async Task CheckConnectionAsync()
+    {
+        if (!IsVpnConnected)
+        {
+            SetStatus("Сейчас не подключено.");
+            _tray?.Notify("Не подключено");
+            return;
+        }
+
+        SetStatus("Проверка соединения…");
+        try
+        {
+            bool ok;
+            if (_awgConnected || _connectedServer?.Protocol == "amneziawg")
+                ok = await ProbeDirectAsync();
+            else if (_activeCore == ProxyCoreKind.Xray)
+                ok = await _xray.ProbeConnectivityAsync();
+            else
+                ok = await _runner.ProbeConnectivityAsync();
+
+            var name = _connectedServer?.Name ?? "туннель";
+            if (ok)
+            {
+                SetStatus($"Соединение в порядке («{name}»).");
+                _tray?.Notify($"OK: {name}");
+            }
+            else
+            {
+                SetStatus($"Соединение не отвечает («{name}»). Попробуйте другой сервер или переподключение.");
+                _tray?.Notify($"Нет ответа: {name}");
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Ошибка проверки: " + ex.Message);
+            _tray?.Notify("Ошибка проверки");
+        }
+    }
+
+    private void MenuRenameServer_OnClick(object sender, RoutedEventArgs e) => RenameSelectedServer();
+
+    private void MenuResetServerName_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (ServerList.SelectedItem is not ServerProfile s)
+            return;
+        _settings.ServerNameOverrides.Remove(s.RawUri);
+        if (!string.IsNullOrWhiteSpace(s.OriginalName))
+            s.Name = s.OriginalName;
+        PersistSettings();
+        RefreshServerList();
+        SetStatus($"Имя сброшено: {s.Name}");
+    }
+
+    private void RenameSelectedServer()
+    {
+        if (ServerList.SelectedItem is not ServerProfile s)
+        {
+            SetStatus("Выберите сервер для переименования.");
+            return;
+        }
+
+        var name = PromptText("Переименовать сервер", "Новое имя (сохраняется локально):", s.Name);
+        if (name is null)
+            return;
+        name = name.Trim();
+        if (name.Length == 0)
+        {
+            SetStatus("Имя не может быть пустым.");
+            return;
+        }
+
+        s.OriginalName ??= s.Name;
+        s.Name = name;
+        _settings.ServerNameOverrides[s.RawUri] = name;
+        PersistSettings();
+        RefreshServerList();
+        SetStatus($"Сервер переименован: {name}");
+    }
+
+    private string? PromptText(string title, string label, string initial)
+    {
+        var box = new System.Windows.Controls.TextBox
+        {
+            Text = initial,
+            MinWidth = 380,
+            MinHeight = 28,
+            Margin = new Thickness(0, 8, 0, 12)
+        };
+        var ok = new System.Windows.Controls.Button
+        {
+            Content = "OK",
+            MinWidth = 90,
+            MinHeight = 28,
+            Margin = new Thickness(0, 0, 8, 0),
+            IsDefault = true
+        };
+        var cancel = new System.Windows.Controls.Button
+        {
+            Content = "Отмена",
+            MinWidth = 90,
+            MinHeight = 28,
+            IsCancel = true
+        };
+        var buttons = new StackPanel
+        {
+            Orientation = System.Windows.Controls.Orientation.Horizontal,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Right
+        };
+        buttons.Children.Add(ok);
+        buttons.Children.Add(cancel);
+        var panel = new StackPanel { Margin = new Thickness(14) };
+        panel.Children.Add(new TextBlock { Text = label, TextWrapping = TextWrapping.Wrap });
+        panel.Children.Add(box);
+        panel.Children.Add(buttons);
+        var dlg = new Window
+        {
+            Title = title,
+            Content = panel,
+            SizeToContent = SizeToContent.WidthAndHeight,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = this,
+            ResizeMode = ResizeMode.NoResize,
+            ShowInTaskbar = false
+        };
+        string? result = null;
+        ok.Click += (_, _) => { result = box.Text; dlg.DialogResult = true; };
+        cancel.Click += (_, _) => { dlg.DialogResult = false; };
+        box.SelectAll();
+        box.Focus();
+        return dlg.ShowDialog() == true ? result : null;
+    }
+
+    private async void MenuImportDomainListUrl_OnClick(object sender, RoutedEventArgs e)
+    {
+        var url = PromptText(
+            "Импорт списка доменов",
+            "URL сырого списка (GitHub raw, geosite-строки или домены по одному в строке):",
+            "https://raw.githubusercontent.com/");
+        if (string.IsNullOrWhiteSpace(url))
+            return;
+        try
+        {
+            using var client = new System.Net.Http.HttpClient { Timeout = TimeSpan.FromSeconds(30) };
+            var body = await client.GetStringAsync(url.Trim());
+            var lines = body.Replace("\r\n", "\n").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .Where(l => !l.StartsWith('#') && l.Length > 0)
+                .Take(5000)
+                .ToList();
+            if (lines.Count == 0)
+            {
+                SetStatus("Список пуст или не распознан.");
+                return;
+            }
+
+            var existing = DomainListBox.Text ?? "";
+            var merged = string.IsNullOrWhiteSpace(existing)
+                ? string.Join(Environment.NewLine, lines)
+                : existing.TrimEnd() + Environment.NewLine + string.Join(Environment.NewLine, lines);
+            DomainListBox.Text = merged;
+            CaptureSettingsFromUi();
+            PersistSettings();
+            SetStatus($"Импортировано строк: {lines.Count}. Сохраните и выберите режим «Только сайты…» или «кроме сайтов…».");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Не удалось загрузить список: " + ex.Message);
+        }
+    }
 
     private void SaveButton_OnClick(object sender, RoutedEventArgs e)
     {
@@ -911,10 +1330,17 @@ public partial class MainWindow : Window
 
     private async void ServerList_OnKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
     {
+        if (e.Key == Key.F2)
+        {
+            e.Handled = true;
+            RenameSelectedServer();
+            return;
+        }
+
         if (e.Key == Key.Enter)
         {
             e.Handled = true;
-            await ConnectAsync(allowFailover: true);
+            await ConnectToggleAsync();
         }
     }
 
@@ -1161,9 +1587,23 @@ public partial class MainWindow : Window
 
             _proxy.DisableIfOwned();
 
+            SetStatus($"Проверка TCP «{server.Name}»…");
+            var (tcpOk, tcpDetail) = await ConnectivityProbe.PreflightTcpAsync(
+                server, TimeSpan.FromSeconds(3));
+            if (!tcpOk)
+            {
+                _connectedServer = null;
+                SetStatus(
+                    $"Сервер «{server.Name}» недоступен до запуска ядра ({tcpDetail}). " +
+                    "Выберите другой или обновите подписку.");
+                _tray?.SetTooltip("Happ Accessible — сервер недоступен");
+                UpdateConnectToggleUi();
+                return ConnectOutcome.Failed;
+            }
+
             SetStatus(useTun
-                ? $"Запуск TUN ({server.Name})… Проверка связи…"
-                : $"Подключение к «{server.Name}»… Проверка связи…");
+                ? $"Запуск TUN ({server.Name}, TCP {tcpDetail})…"
+                : $"Подключение к «{server.Name}» (TCP {tcpDetail})…");
 
             await _runner.StartAsync(server, useTun, routing, GetEngineOptions());
 
@@ -1225,6 +1665,7 @@ public partial class MainWindow : Window
             SetStatus(msg);
             _tray?.SetTooltip($"Happ Accessible — {server.Name}");
             _tray?.Notify(msg);
+            UpdateConnectToggleUi();
             return ConnectOutcome.Success;
         }
         catch (Exception ex)
@@ -1236,6 +1677,7 @@ public partial class MainWindow : Window
             _awgConnected = false;
             SetStatus("Ошибка подключения: " + ex.Message);
             _tray?.SetTooltip("Happ Accessible — ошибка");
+            UpdateConnectToggleUi();
             return ConnectOutcome.Failed;
         }
         finally
@@ -1252,7 +1694,19 @@ public partial class MainWindow : Window
             await _runner.StopAsync();
 
             var engine = GetEngineOptions();
-            SetStatus($"Xray: «{server.Name}»… Проверка связи…");
+            SetStatus($"Xray: проверка TCP «{server.Name}»…");
+            var (tcpOk, tcpDetail) = await ConnectivityProbe.PreflightTcpAsync(
+                server, TimeSpan.FromSeconds(3));
+            if (!tcpOk)
+            {
+                _connectedServer = null;
+                SetStatus(
+                    $"Сервер «{server.Name}» недоступен ({tcpDetail}). Выберите другой.");
+                UpdateConnectToggleUi();
+                return ConnectOutcome.Failed;
+            }
+
+            SetStatus($"Xray: «{server.Name}» (TCP {tcpDetail})…");
             await _xray.StartAsync(server, engine);
 
             if (epoch != _sessionEpoch)
@@ -1301,6 +1755,7 @@ public partial class MainWindow : Window
             SetStatus(msg);
             _tray?.SetTooltip($"Happ Accessible — {server.Name} (Xray)");
             _tray?.Notify(msg);
+            UpdateConnectToggleUi();
             return ConnectOutcome.Success;
         }
         catch (Exception ex)
@@ -1309,6 +1764,7 @@ public partial class MainWindow : Window
             await _xray.StopAsync();
             _connectedServer = null;
             SetStatus("Ошибка Xray: " + ex.Message);
+            UpdateConnectToggleUi();
             return ConnectOutcome.Failed;
         }
     }
@@ -1381,6 +1837,7 @@ public partial class MainWindow : Window
             SetStatus(msg);
             _tray?.SetTooltip($"Happ Accessible — AWG {server.Name}");
             _tray?.Notify(msg);
+            UpdateConnectToggleUi();
             return ConnectOutcome.Success;
         }
         catch (Exception ex)
@@ -1390,6 +1847,7 @@ public partial class MainWindow : Window
             try { await _awg.DisconnectAsync(); } catch { /* ignore */ }
             SetStatus("Ошибка AmneziaWG: " + ex.Message);
             _tray?.SetTooltip("Happ Accessible — ошибка AWG");
+            UpdateConnectToggleUi();
             return ConnectOutcome.Failed;
         }
     }
@@ -1491,12 +1949,14 @@ public partial class MainWindow : Window
             _connectedServer = null;
             _activeCore = ProxyCoreKind.SingBox;
             SetStatus("Отключено.");
+            UpdateConnectToggleUi();
             _tray?.SetTooltip("Happ Accessible — не подключено");
             _tray?.Notify("Отключено.");
         }
         catch (Exception ex)
         {
             SetStatus("Ошибка отключения: " + ex.Message);
+            UpdateConnectToggleUi();
         }
     }
 
@@ -1507,7 +1967,7 @@ public partial class MainWindow : Window
             || RoutingModeBox is null || DomainListBox is null || AppListBox is null
             || AutoUpdateSubCheck is null || AutoWhitelistCheck is null
             || TunStackBox is null || MixedPortBox is null
-            || ProxyCoreBox is null || AutoUpdateCoresCheck is null)
+            || ProxyCoreBox is null || AutoUpdateCoresCheck is null || AutoUpdateAppCheck is null)
             return;
 
         // Subscription text lives in settings (edited via menu), not a permanent textbox
@@ -1520,6 +1980,7 @@ public partial class MainWindow : Window
             MixedPortBox.Text = _settings.MixedPort.ToString();
         _settings.ProxyCore = GetSelectedProxyCoreSetting();
         _settings.AutoUpdateCores = AutoUpdateCoresCheck.IsChecked == true;
+        _settings.AutoUpdateApp = AutoUpdateAppCheck.IsChecked == true;
         _settings.AutoConnect = AutoConnectCheck.IsChecked == true;
         _settings.StartMinimizedToTray = StartMinimizedCheck.IsChecked == true;
         _settings.AutoUpdateSubscription = AutoUpdateSubCheck.IsChecked == true;
@@ -1725,6 +2186,20 @@ public partial class MainWindow : Window
             var again = _servers.FirstOrDefault(s => s.RawUri == selectedUri);
             if (again is not null)
                 ServerList.SelectedItem = again;
+        }
+    }
+
+    private void ApplyNameOverrides()
+    {
+        _settings.ServerNameOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var s in _servers)
+        {
+            s.OriginalName ??= s.Name;
+            if (_settings.ServerNameOverrides.TryGetValue(s.RawUri, out var custom)
+                && !string.IsNullOrWhiteSpace(custom))
+            {
+                s.Name = custom.Trim();
+            }
         }
     }
 

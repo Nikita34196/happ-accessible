@@ -106,12 +106,19 @@
                                 AutomationProperties.Name="Показать подключённые устройства" />
                         <ListBox x:Name="DeviceList"
                                  Height="140"
+                                 DisplayMemberPath="Display"
                                  AutomationProperties.Name="Список устройств HWID"
-                                 AutomationProperties.HelpText="Выберите устройство и удалите при необходимости" />
-                        <Button Content="Удалить выбранное устройство"
-                                MinHeight="32" HorizontalAlignment="Left" Margin="0,8,0,0"
-                                Click="DeleteDevice_OnClick"
-                                AutomationProperties.Name="Удалить выбранное устройство" />
+                                 AutomationProperties.HelpText="Выберите устройство стрелками, затем удалите" />
+                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                            <Button Content="Удалить выбранное устройство"
+                                    MinHeight="32" Margin="0,0,8,0"
+                                    Click="DeleteDevice_OnClick"
+                                    AutomationProperties.Name="Удалить выбранное устройство" />
+                            <Button Content="Удалить все устройства"
+                                    MinHeight="32"
+                                    Click="DeleteAllDevices_OnClick"
+                                    AutomationProperties.Name="Удалить все устройства пользователя" />
+                        </StackPanel>
                     </StackPanel>
                 </GroupBox>
             </StackPanel>

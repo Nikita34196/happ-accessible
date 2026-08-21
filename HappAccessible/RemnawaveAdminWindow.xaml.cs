@@ -191,7 +191,7 @@ public partial class RemnawaveAdminWindow : Window
 
             SetStatus("Меняю лимит…");
             var client = CreateClient();
-            _user = await client.UpdateHwidLimitAsync(_user.Uuid, limit);
+            _user = await client.UpdateHwidLimitAsync(_user.Id, limit);
             LimitBox.Text = (_user.HwidDeviceLimit ?? limit).ToString();
             UpdateUserInfo();
             SetStatus($"Лимит устройств: {_user.HwidDeviceLimit}.");
@@ -226,7 +226,7 @@ public partial class RemnawaveAdminWindow : Window
 
         SetStatus("Загружаю устройства…");
         var client = CreateClient();
-        var devices = await client.GetDevicesAsync(_user.Uuid);
+        var devices = await client.GetDevicesAsync(_user.Id);
         _devices.Clear();
         foreach (var d in devices)
         {
@@ -235,14 +235,19 @@ public partial class RemnawaveAdminWindow : Window
                 d.Platform,
                 d.DeviceModel,
                 d.OsVersion,
-                Truncate(d.Hwid, 16),
+                Truncate(d.Hwid, 20),
                 d.CreatedAt?.ToLocalTime().ToString("g")
             }.Where(s => !string.IsNullOrWhiteSpace(s)));
+            if (string.IsNullOrWhiteSpace(label))
+                label = Truncate(d.Hwid, 40);
             _devices.Add(new DeviceRow { Device = d, Display = label });
         }
 
+        DeviceList.DisplayMemberPath = nameof(DeviceRow.Display);
         DeviceList.ItemsSource = null;
         DeviceList.ItemsSource = _devices;
+        if (_devices.Count > 0)
+            DeviceList.SelectedIndex = 0;
         SetStatus($"Устройств: {_devices.Count} (лимит {_user.HwidDeviceLimit?.ToString() ?? "—"}).");
     }
 
@@ -250,15 +255,27 @@ public partial class RemnawaveAdminWindow : Window
     {
         try
         {
-            if (_user is null || DeviceList.SelectedItem is not DeviceRow row)
+            if (_user is null)
             {
-                SetStatus("Выберите устройство в списке.");
+                SetStatus("Сначала загрузите пользователя.");
+                return;
+            }
+
+            if (DeviceList.SelectedItem is not DeviceRow row || string.IsNullOrWhiteSpace(row.Device.Hwid))
+            {
+                SetStatus("Выберите устройство в списке (стрелки ↑↓), затем удалите.");
+                System.Windows.MessageBox.Show(
+                    this,
+                    "Сначала выберите устройство в списке.",
+                    "Удаление устройства",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
                 return;
             }
 
             SetStatus("Удаляю устройство…");
             var client = CreateClient();
-            await client.DeleteDeviceAsync(_user.Uuid, row.Device.Hwid);
+            await client.DeleteDeviceAsync(_user.Id, row.Device.Hwid);
             SetStatus("Устройство удалено. Обновляю список…");
             await RefreshDevicesAsync();
         }
@@ -266,6 +283,50 @@ public partial class RemnawaveAdminWindow : Window
         {
             SetStatus("Ошибка удаления: " + ex.Message);
             AppLogService.Error("Remnawave delete device", ex);
+            System.Windows.MessageBox.Show(
+                this,
+                ex.Message,
+                "Ошибка удаления устройства",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
+
+    private async void DeleteAllDevices_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (_user is null)
+            {
+                SetStatus("Сначала загрузите пользователя.");
+                return;
+            }
+
+            var confirm = System.Windows.MessageBox.Show(
+                this,
+                $"Удалить все HWID-устройства пользователя {_user.Username}?",
+                "Удалить все устройства",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes)
+                return;
+
+            SetStatus("Удаляю все устройства…");
+            var client = CreateClient();
+            await client.DeleteAllDevicesAsync(_user.Id);
+            await RefreshDevicesAsync();
+            SetStatus("Все устройства удалены.");
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Ошибка удаления всех: " + ex.Message);
+            AppLogService.Error("Remnawave delete all devices", ex);
+            System.Windows.MessageBox.Show(
+                this,
+                ex.Message,
+                "Ошибка удаления устройств",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
     }
 
@@ -278,7 +339,7 @@ public partial class RemnawaveAdminWindow : Window
         }
 
         UserInfoText.Text =
-            $"{_user.Username} · статус {_user.Status ?? "—"} · устройств лимит {_user.HwidDeviceLimit?.ToString() ?? "—"} · " +
+            $"{_user.Username} · id {_user.Id} · статус {_user.Status ?? "—"} · устройств лимит {_user.HwidDeviceLimit?.ToString() ?? "—"} · " +
             $"до {_user.ExpireAt?.ToLocalTime().ToString("d") ?? "—"} · online {_user.OnlineAt?.ToLocalTime().ToString("g") ?? "—"} · " +
             $"short {_user.ShortUuid}";
     }

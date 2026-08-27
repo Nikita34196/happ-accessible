@@ -19,9 +19,9 @@ public sealed class ServerProfile
     {
         get
         {
-            var ping = LatencyMs is null ? "нет ответа"
+            var ping = LatencyMs is null ? "нет ответа TCP"
                 : LatencyMs < 0 ? "…"
-                : $"{LatencyMs} мс";
+                : $"TCP {LatencyMs} мс";
             var mark = IsWhitelistBypass ? "обход БС, " : "";
             return $"{Name} ({mark}{Protocol}, {ping})";
         }

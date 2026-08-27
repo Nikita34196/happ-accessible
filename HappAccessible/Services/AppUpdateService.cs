@@ -30,6 +30,11 @@ public sealed class AppUpdateService
         var http = new HttpClient { Timeout = TimeSpan.FromMinutes(8) };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + GetCurrentVersion());
         http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
+        http.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+        {
+            NoCache = true,
+            NoStore = true
+        };
         return http;
     }
 

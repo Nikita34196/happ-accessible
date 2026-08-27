@@ -6,6 +6,7 @@ namespace HappAccessible.Services;
 
 public static class PingService
 {
+    /// <summary>Direct TCP connect to server host:port (bypasses VPN — reachability only).</summary>
     public static async Task<int?> PingAsync(ServerProfile server, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(server.Host) || server.Port <= 0)
@@ -26,6 +27,10 @@ public static class PingService
             return null;
         }
     }
+
+    /// <summary>HTTP latency through local mixed port — actual tunnel health when connected.</summary>
+    public static Task<int?> PingViaTunnelAsync(int mixedPort, CancellationToken ct = default) =>
+        ConnectivityProbe.ProbeHttpLatencyViaProxyAsync(mixedPort, ct);
 
     public static async Task PingAllAsync(
         IEnumerable<ServerProfile> servers,

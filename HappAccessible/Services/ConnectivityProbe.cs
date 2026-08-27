@@ -55,6 +55,11 @@ public static class ConnectivityProbe
     }
 
     public static async Task<bool> ProbeHttpViaProxyAsync(
+        int mixedPort, CancellationToken ct = default) =>
+        await ProbeHttpLatencyViaProxyAsync(mixedPort, ct).ConfigureAwait(false) is not null;
+
+    /// <summary>HTTP round-trip via local mixed port — reflects real tunnel latency.</summary>
+    public static async Task<int?> ProbeHttpLatencyViaProxyAsync(
         int mixedPort, CancellationToken ct = default)
     {
         var urls = new[]
@@ -70,19 +75,25 @@ public static class ConnectivityProbe
             UseProxy = true,
             ServerCertificateCustomValidationCallback = (_, _, _, _) => true
         };
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(6) };
+        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
 
+        int? best = null;
         foreach (var url in urls)
         {
             ct.ThrowIfCancellationRequested();
             try
             {
+                var sw = Stopwatch.StartNew();
                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                linked.CancelAfter(TimeSpan.FromSeconds(5));
+                linked.CancelAfter(TimeSpan.FromSeconds(6));
                 using var resp = await client.GetAsync(url, linked.Token).ConfigureAwait(false);
+                sw.Stop();
                 var code = (int)resp.StatusCode;
                 if (code is 204 or 200 or 301 or 302 or 404)
-                    return true;
+                {
+                    var ms = (int)sw.ElapsedMilliseconds;
+                    best = best is null ? ms : Math.Min(best.Value, ms);
+                }
             }
             catch
             {
@@ -90,6 +101,6 @@ public static class ConnectivityProbe
             }
         }
 
-        return false;
+        return best;
     }
 }

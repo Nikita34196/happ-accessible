@@ -228,7 +228,9 @@ public partial class MainWindow : Window
             PersistSettings();
             if (!info.UpdateAvailable)
             {
-                SetStatus($"Уже последняя версия: {info.CurrentVersion}.");
+                SetStatus(string.Equals(info.CurrentVersion, info.LatestVersion, StringComparison.OrdinalIgnoreCase)
+                    ? $"Уже последняя версия: {info.CurrentVersion}."
+                    : $"Обновление не предложено. У вас {info.CurrentVersion}, на GitHub {info.LatestVersion}. Скачайте вручную: {info.ReleaseUrl}");
                 return;
             }
 
@@ -445,8 +447,7 @@ public partial class MainWindow : Window
             try { await HealthCheckTickAsync(); }
             finally { _healthTickRunning = false; }
         };
-        if (_settings.AutoWhitelistFailover)
-            _healthTimer.Start();
+        _healthTimer.Start();
     }
 
     private async Task AutoUpdateSubscriptionTickAsync()
@@ -483,20 +484,33 @@ public partial class MainWindow : Window
 
     private async Task HealthCheckTickAsync()
     {
-        if (!_settings.AutoWhitelistFailover || _connectedServer is null || _connectBusy || _failoverBusy)
+        if (_connectBusy || _failoverBusy || !IsVpnConnected)
             return;
 
-        // Do not auto-switch away from AmneziaWG on flaky HTTP probes
-        if (_awgConnected || _connectedServer.Protocol == "amneziawg")
+        if (_awgConnected || _connectedServer?.Protocol == "amneziawg")
             return;
 
-        if (GetSelectedRoutingModeTag() is "proxy-list" or "app-proxy" or "app-bypass")
+        if (_connectedServer is null)
             return;
+
+        var coreAlive = _activeCore == ProxyCoreKind.Xray ? _xray.IsRunning : _runner.IsRunning;
+        if (!coreAlive)
+        {
+            await HandleSessionFailureAsync("ядро прокси завершилось");
+            return;
+        }
+
+        var skipHttpProbe = GetSelectedRoutingModeTag() is "proxy-list" or "app-proxy" or "app-bypass";
+        if (skipHttpProbe)
+        {
+            _healthFailStreak = 0;
+            return;
+        }
 
         var ok = _activeCore == ProxyCoreKind.Xray
             ? await _xray.ProbeConnectivityAsync()
             : await _runner.ProbeConnectivityAsync();
-        if (_connectedServer is null || _connectBusy || _failoverBusy)
+        if (_connectBusy || _failoverBusy || _connectedServer is null)
             return;
         if (ok)
         {
@@ -512,11 +526,35 @@ public partial class MainWindow : Window
         }
 
         _healthFailStreak = 0;
-        var failed = _connectedServer;
-        if (failed is null || failed.Protocol == "amneziawg")
+        await HandleSessionFailureAsync("туннель не отвечает");
+    }
+
+    private async Task HandleSessionFailureAsync(string reason)
+    {
+        if (_connectBusy || _failoverBusy || _connectedServer is null)
             return;
-        SetStatus($"Туннель не отвечает ({failed.Name}). Ищу сервер обхода белых списков…");
-        await FailoverToWhitelistAsync(excludeUri: failed.RawUri);
+
+        var failed = _connectedServer;
+        var failedUri = failed.RawUri;
+
+        if (_settings.AutoWhitelistFailover && failed.Protocol != "amneziawg")
+        {
+            SetStatus($"Проверка связи: {reason} ({failed.Name}). Ищу сервер обхода белых списков…");
+            await FailoverToWhitelistAsync(excludeUri: failedUri);
+            return;
+        }
+
+        SetStatus($"Проверка связи: {reason} ({failed.Name}). Переподключаюсь…");
+        _tray?.Notify($"Переподключение: {failed.Name}");
+
+        await DisconnectAsync();
+
+        var server = _servers.FirstOrDefault(s => s.RawUri == failedUri);
+        if (server is null)
+            return;
+
+        ServerList.SelectedItem = server;
+        await ConnectAsync(allowFailover: false, server);
     }
 
     private static async Task<bool> ProbeDirectAsync()
@@ -1191,9 +1229,23 @@ public partial class MainWindow : Window
             var ms = await PingService.PingAsync(server, ct);
             server.LatencyMs = ms;
             RefreshServerList();
+
+            int? tunnelMs = null;
+            if (IsVpnConnected && !_awgConnected
+                && _connectedServer is not null
+                && string.Equals(_connectedServer.RawUri, server.RawUri, StringComparison.Ordinal))
+            {
+                var port = _activeCore == ProxyCoreKind.Xray
+                    ? _xray.ActivePort
+                    : _runner.ActiveMixedPort;
+                tunnelMs = await PingService.PingViaTunnelAsync(port, ct);
+            }
+
             SetStatus(ms is null
-                ? $"«{server.Name}»: нет ответа (TCP {server.Host}:{server.Port}, 3 с)."
-                : $"«{server.Name}»: {ms} мс.");
+                ? $"«{server.Name}»: нет ответа (прямой TCP {server.Host}:{server.Port}, 3 с)."
+                : tunnelMs is int t
+                    ? $"«{server.Name}»: TCP {ms} мс, через туннель {t} мс."
+                    : $"«{server.Name}»: TCP {ms} мс (прямое подключение, не через VPN).");
         }
         catch (OperationCanceledException)
         {
@@ -1237,13 +1289,15 @@ public partial class MainWindow : Window
 
             if (best is not null)
             {
-                SetStatus($"Пинг готов: отвечают {ok} из {_servers.Count}. Лучший: {best.Name}, {best.LatencyMs} мс.");
+                SetStatus(
+                    $"Пинг готов: отвечают {ok} из {_servers.Count} (прямой TCP). " +
+                    $"Лучший: {best.Name}, TCP {best.LatencyMs} мс.");
                 if (ServerList.SelectedItem is null)
                     ServerList.SelectedItem = best;
             }
             else
             {
-                SetStatus($"Пинг готов: ни один сервер не ответил за 3 секунды ({_servers.Count} шт.).");
+                SetStatus($"Пинг готов: ни один сервер не ответил по прямому TCP за 3 секунды ({_servers.Count} шт.).");
             }
         }
         catch (OperationCanceledException)
@@ -2065,8 +2119,11 @@ public partial class MainWindow : Window
             if (epoch != _sessionEpoch)
                 return;
 
-            SetStatus("Автопереключение не удалось: ни один кандидат обхода БС не дал трафик.");
+            SetStatus("Автопереключение не удалось: ни один кандидат обхода БС не дал трафик. Отключаюсь.");
             _tray?.SetTooltip("Happ Accessible — нет связи");
+            _tray?.Notify("Нет связи — отключено");
+            if (IsVpnConnected)
+                await DisconnectAsync();
         }
         finally
         {

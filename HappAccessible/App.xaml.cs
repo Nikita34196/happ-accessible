@@ -6,8 +6,19 @@ namespace HappAccessible;
 
 public partial class App : System.Windows.Application
 {
+    private SingleInstanceManager? _singleInstance;
+
     protected override void OnStartup(StartupEventArgs e)
     {
+        _singleInstance = new SingleInstanceManager();
+        if (!_singleInstance.IsFirstInstance)
+        {
+            _singleInstance.TryActivateExistingInstance();
+            _singleInstance.Dispose();
+            Shutdown();
+            return;
+        }
+
         base.OnStartup(e);
         AppLogService.EnsureLogFile();
         AppLogService.Info("Приложение запущено, версия " + AppUpdateService.GetCurrentVersion());
@@ -24,11 +35,21 @@ public partial class App : System.Windows.Application
             AppLogService.Error("Необработанное исключение задачи", args.Exception);
             args.SetObserved();
         };
+
+        _singleInstance.StartActivationListener(() =>
+        {
+            Dispatcher.BeginInvoke(() => HappAccessible.MainWindow.ActivateExistingInstance(), DispatcherPriority.Normal);
+        });
+    }
+
+    protected override void OnExit(ExitEventArgs e)
+    {
+        _singleInstance?.Dispose();
+        base.OnExit(e);
     }
 
     private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         AppLogService.Error("Необработанное исключение UI", e.Exception);
-        // keep default crash behavior unless we mark handled
     }
 }

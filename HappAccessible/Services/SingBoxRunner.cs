@@ -130,27 +130,13 @@ public sealed class SingBoxRunner : IDisposable
                     ?? throw new FileNotFoundException("sing-box.exe не найден после распаковки lx.");
 
         var foundDir = Path.GetDirectoryName(found)!;
-        // Replace root binary atomically enough for Windows (delete then copy)
-        try
-        {
-            if (File.Exists(exe))
-                File.Delete(exe);
-        }
-        catch (Exception ex)
-        {
-            throw new IOException(
-                "Не удалось заменить sing-box.exe (файл занят?). Закройте Happ Accessible и повторите обновление ядер. "
-                + ex.Message, ex);
-        }
 
-        File.Copy(found, exe, overwrite: true);
-        // lx ships libcronet.dll next to the exe (naive outbound)
-        foreach (var extra in new[] { "libcronet.dll", "wintun.dll" })
-        {
-            var src = Path.Combine(foundDir, extra);
-            if (File.Exists(src))
-                File.Copy(src, Path.Combine(_toolsDir, extra), overwrite: true);
-        }
+        await BinaryUpdateHelper.InstallExecutableAsync(
+            exe,
+            found,
+            stopRunningAsync: StopAsync,
+            ct: ct).ConfigureAwait(false);
+        BinaryUpdateHelper.CopySidecarFiles(foundDir, _toolsDir, "libcronet.dll", "wintun.dll");
 
         try { Directory.Delete(extractDir, recursive: true); } catch { /* keep */ }
 

@@ -58,23 +58,27 @@ public static class SingBoxConfigBuilder
             },
             // QUIC (UDP/443) через VLESS+xhttp часто зависает — Google/YouTube в Chrome
             // не открываются, пока браузер не упадёт на TCP HTTPS. Telegram на TCP ок.
-            new Dictionary<string, object?>
+        };
+        if (engine.RejectQuicUdp443)
+        {
+            rules.Add(new Dictionary<string, object?>
             {
                 ["protocol"] = "quic",
                 ["action"] = "reject"
-            },
-            new Dictionary<string, object?>
+            });
+            rules.Add(new Dictionary<string, object?>
             {
                 ["network"] = "udp",
                 ["port"] = 443,
                 ["action"] = "reject"
-            },
-            new Dictionary<string, object?>
-            {
-                ["ip_is_private"] = true,
-                ["outbound"] = "direct"
-            }
-        };
+            });
+        }
+
+        rules.Add(new Dictionary<string, object?>
+        {
+            ["ip_is_private"] = true,
+            ["outbound"] = "direct"
+        });
 
         // Never send traffic to the VPN node itself through the tunnel (TUN loop)
         if (!string.IsNullOrWhiteSpace(server.Host))
@@ -209,6 +213,9 @@ public static class SingBoxConfigBuilder
         if (dnsRules is not null)
             dnsRulesList.AddRange(dnsRules);
 
+        var dnsRemote = NormalizeDnsHost(engine.DnsRemoteServer, "1.1.1.1");
+        var dnsFallback = NormalizeDnsHost(engine.DnsRemoteFallback, "8.8.8.8");
+
         var dns = new Dictionary<string, object?>
         {
             ["servers"] = new object[]
@@ -217,7 +224,14 @@ public static class SingBoxConfigBuilder
                 {
                     ["type"] = "https",
                     ["tag"] = "dns-remote",
-                    ["server"] = "1.1.1.1",
+                    ["server"] = dnsRemote,
+                    ["detour"] = "proxy"
+                },
+                new Dictionary<string, object?>
+                {
+                    ["type"] = "https",
+                    ["tag"] = "dns-remote-fallback",
+                    ["server"] = dnsFallback,
                     ["detour"] = "proxy"
                 },
                 new Dictionary<string, object?>
@@ -227,8 +241,7 @@ public static class SingBoxConfigBuilder
                 }
             },
             ["final"] = dnsFinal,
-            // Google/YouTube часто ломаются на кривом IPv6 через TUN — только IPv4
-            ["strategy"] = "ipv4_only"
+            ["strategy"] = NormalizeDnsStrategy(engine.DnsStrategy)
         };
         if (dnsRulesList.Count > 0)
             dns["rules"] = dnsRulesList;
@@ -248,6 +261,8 @@ public static class SingBoxConfigBuilder
         var cachePath = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "HappAccessible", "data", "cache.db");
+
+        RotateDnsCacheIfStale(TimeSpan.FromHours(12));
 
         var config = new Dictionary<string, object?>
         {
@@ -783,4 +798,37 @@ public static class SingBoxConfigBuilder
 
         return outbound;
     }
+
+    public static void RotateDnsCacheIfStale(TimeSpan maxAge)
+    {
+        try
+        {
+            var cachePath = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "HappAccessible", "data", "cache.db");
+            if (!File.Exists(cachePath))
+                return;
+            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) > maxAge)
+                File.Delete(cachePath);
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
+    private static string NormalizeDnsHost(string? host, string fallback)
+    {
+        host = (host ?? "").Trim();
+        return host.Length > 0 ? host : fallback;
+    }
+
+    private static string NormalizeDnsStrategy(string? strategy) =>
+        (strategy ?? "").Trim().ToLowerInvariant() switch
+        {
+            "prefer_ipv4" => "prefer_ipv4",
+            "prefer_ipv6" => "prefer_ipv6",
+            "ipv6_only" => "ipv6_only",
+            _ => "ipv4_only"
+        };
 }

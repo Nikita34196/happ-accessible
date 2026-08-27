@@ -14,12 +14,13 @@ public sealed class SystemProxyService
     private string? _ourServer;
 
     /// <summary>
-    /// If a previous crash left our proxy enabled, turn it off so the machine has internet again.
+    /// If a previous crash left our proxy enabled, turn it off only when session marker matches.
     /// </summary>
     public void ClearStaleOwnedProxy(params int[] knownPorts)
     {
         try
         {
+            var session = ProxySessionStore.TryLoad();
             using var key = Registry.CurrentUser.OpenSubKey(KeyPath, writable: true);
             if (key is null)
                 return;
@@ -27,7 +28,19 @@ public sealed class SystemProxyService
             var enabled = key.GetValue("ProxyEnable") as int? ?? 0;
             var server = key.GetValue("ProxyServer") as string ?? "";
             if (enabled != 1)
+            {
+                ProxySessionStore.Clear();
                 return;
+            }
+
+            if (session is not null
+                && string.Equals(server, session.ProxyServer, StringComparison.OrdinalIgnoreCase))
+            {
+                RestorePrevious(key, session.PrevEnable, session.PrevServer, session.PrevOverride, session.HadOverride);
+                ProxySessionStore.Clear();
+                NotifyChanged();
+                return;
+            }
 
             var ports = knownPorts.Length > 0
                 ? knownPorts
@@ -42,6 +55,7 @@ public sealed class SystemProxyService
             key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
             key.DeleteValue("ProxyServer", throwOnMissingValue: false);
             key.DeleteValue("ProxyOverride", throwOnMissingValue: false);
+            ProxySessionStore.Clear();
             NotifyChanged();
         }
         catch
@@ -65,6 +79,16 @@ public sealed class SystemProxyService
         key.SetValue("ProxyServer", _ourServer, RegistryValueKind.String);
         key.SetValue("ProxyOverride", "localhost;127.*;10.*;192.168.*;<local>", RegistryValueKind.String);
         _weEnabled = true;
+
+        ProxySessionStore.Save(new ProxySessionStore.Session
+        {
+            ProxyServer = _ourServer,
+            PrevEnable = _prevEnable,
+            PrevServer = _prevServer,
+            PrevOverride = _prevOverride,
+            HadOverride = _hadOverride
+        });
+
         NotifyChanged();
     }
 
@@ -77,24 +101,35 @@ public sealed class SystemProxyService
         if (key is null)
             return;
 
-        if (_prevEnable is int en)
+        RestorePrevious(key, _prevEnable, _prevServer, _prevOverride, _hadOverride);
+
+        _weEnabled = false;
+        _ourServer = null;
+        ProxySessionStore.Clear();
+        NotifyChanged();
+    }
+
+    private static void RestorePrevious(
+        RegistryKey key,
+        int? prevEnable,
+        string? prevServer,
+        string? prevOverride,
+        bool hadOverride)
+    {
+        if (prevEnable is int en)
             key.SetValue("ProxyEnable", en, RegistryValueKind.DWord);
         else
             key.SetValue("ProxyEnable", 0, RegistryValueKind.DWord);
 
-        if (_prevServer is not null)
-            key.SetValue("ProxyServer", _prevServer, RegistryValueKind.String);
+        if (prevServer is not null)
+            key.SetValue("ProxyServer", prevServer, RegistryValueKind.String);
         else
             key.DeleteValue("ProxyServer", throwOnMissingValue: false);
 
-        if (_hadOverride && _prevOverride is not null)
-            key.SetValue("ProxyOverride", _prevOverride, RegistryValueKind.String);
+        if (hadOverride && prevOverride is not null)
+            key.SetValue("ProxyOverride", prevOverride, RegistryValueKind.String);
         else
             key.DeleteValue("ProxyOverride", throwOnMissingValue: false);
-
-        _weEnabled = false;
-        _ourServer = null;
-        NotifyChanged();
     }
 
     private static void NotifyChanged()

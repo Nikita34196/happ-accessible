@@ -9,6 +9,12 @@ public sealed class EngineOptions
     public int MixedPort { get; init; } = DefaultMixedPort;
     /// <summary>gvisor | mixed | system</summary>
     public string TunStack { get; init; } = DefaultTunStack;
+    /// <summary>ipv4_only | prefer_ipv4 | prefer_ipv6 | ipv6_only</summary>
+    public string DnsStrategy { get; init; } = "ipv4_only";
+    public string DnsRemoteServer { get; init; } = "1.1.1.1";
+    public string DnsRemoteFallback { get; init; } = "8.8.8.8";
+    /// <summary>Reject QUIC/UDP443 — helps xhttp/VLESS in Chrome.</summary>
+    public bool RejectQuicUdp443 { get; init; } = true;
 
     public static int ClampPort(int port) =>
         port is >= 1024 and <= 65535 ? port : DefaultMixedPort;

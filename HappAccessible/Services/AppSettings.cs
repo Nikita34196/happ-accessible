@@ -45,6 +45,11 @@ public sealed class AppSettings
     /// If the current tunnel dies (or connect fails), try RU / whitelist-bypass servers automatically.
     /// </summary>
     public bool AutoWhitelistFailover { get; set; } = true;
+    /// <summary>ipv4_only | prefer_ipv4 | prefer_ipv6 | ipv6_only</summary>
+    public string DnsStrategy { get; set; } = "ipv4_only";
+    public string DnsRemoteServer { get; set; } = "1.1.1.1";
+    public string DnsRemoteFallback { get; set; } = "8.8.8.8";
+    public bool RejectQuicUdp443 { get; set; } = true;
 
     /// <summary>Remnawave panel base URL for in-app admin (e.g. https://host.sslip.io).</summary>
     public string? RemnawavePanelUrl { get; set; }

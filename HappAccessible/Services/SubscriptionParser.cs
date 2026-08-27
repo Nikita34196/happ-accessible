@@ -20,6 +20,10 @@ public static class SubscriptionParser
 
         var text = content.Trim();
 
+        var jsonProfiles = SubscriptionJsonParser.TryParse(text);
+        if (jsonProfiles.Count > 0)
+            return jsonProfiles;
+
         // Clash / Clash Meta YAML
         if (ClashYamlParser.LooksLikeClash(text))
         {

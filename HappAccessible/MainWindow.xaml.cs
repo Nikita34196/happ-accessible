@@ -37,7 +37,28 @@ public partial class MainWindow : Window
     private bool _subUpdateTickRunning;
     private int _sessionEpoch; // bumped on Disconnect to cancel in-flight failover/connect follow-ups
     private bool _remnawaveAdminUnlockedThisSession;
+    private NetworkChangeMonitor? _networkMonitor;
+    private bool _networkRecoveryBusy;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
+
+    public static void ActivateExistingInstance()
+    {
+        if (System.Windows.Application.Current?.MainWindow is not MainWindow window)
+            return;
+        window.BringToForeground();
+    }
+
+    public void BringToForeground()
+    {
+        if (_tray is not null && !IsVisible)
+            _tray.ShowWindow();
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
 
     public MainWindow()
     {
@@ -122,6 +143,7 @@ public partial class MainWindow : Window
         }
 
         RestartBackgroundTimers();
+        StartNetworkMonitor();
         MergeAmneziaConfigsIntoList();
 
         if (!string.IsNullOrWhiteSpace(_settings.SubscriptionInput))
@@ -244,7 +266,7 @@ public partial class MainWindow : Window
 
     private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool announce)
     {
-        var progress = new Progress<string>(SetStatus);
+        var progress = new Progress<string>(msg => SetStatus(msg));
         if (AppUpdateService.IsRunningFromInstallDir() && !string.IsNullOrEmpty(info.SetupExeUrl))
         {
             var setup = await _appUpdates.DownloadSetupAsync(info, progress);
@@ -450,6 +472,35 @@ public partial class MainWindow : Window
         _healthTimer.Start();
     }
 
+    private void StartNetworkMonitor()
+    {
+        _networkMonitor?.Dispose();
+        _networkMonitor = new NetworkChangeMonitor();
+        _networkMonitor.RecoverySuggested += reason =>
+        {
+            Dispatcher.InvokeAsync(async () => await HandleNetworkRecoveryAsync(reason));
+        };
+        _networkMonitor.Start();
+    }
+
+    private async Task HandleNetworkRecoveryAsync(string reason)
+    {
+        if (_networkRecoveryBusy || _connectBusy || _failoverBusy || !IsVpnConnected)
+            return;
+
+        _networkRecoveryBusy = true;
+        try
+        {
+            SetStatus($"Сеть: {reason}. Проверяю соединение…", important: false);
+            await HealthCheckTickAsync(forceImmediate: true);
+        }
+        finally
+        {
+            _networkRecoveryBusy = false;
+            _networkMonitor?.ResetBackoff();
+        }
+    }
+
     private async Task AutoUpdateSubscriptionTickAsync()
     {
         if (!_settings.AutoUpdateSubscription)
@@ -482,7 +533,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task HealthCheckTickAsync()
+    private async Task HealthCheckTickAsync(bool forceImmediate = false)
     {
         if (_connectBusy || _failoverBusy || !IsVpnConnected)
             return;
@@ -500,7 +551,8 @@ public partial class MainWindow : Window
             return;
         }
 
-        var skipHttpProbe = GetSelectedRoutingModeTag() is "proxy-list" or "app-proxy" or "app-bypass";
+        var skipHttpProbe = !forceImmediate
+                            && GetSelectedRoutingModeTag() is "proxy-list" or "app-proxy" or "app-bypass";
         if (skipHttpProbe)
         {
             _healthFailStreak = 0;
@@ -521,7 +573,7 @@ public partial class MainWindow : Window
         _healthFailStreak++;
         if (_healthFailStreak < 2)
         {
-            SetStatus("Проверка связи: сбой, повторю ещё раз…");
+            SetStatus("Проверка связи: сбой, повторю ещё раз…", important: false);
             return;
         }
 
@@ -1055,16 +1107,57 @@ public partial class MainWindow : Window
             catch (Exception fetchEx)
             {
                 var cached = SubscriptionFetcher.TryLoadCacheOnly(input);
-                if (cached is null)
-                    throw;
+                if (cached is not null && SubscriptionParser.Parse(cached).Count > 0)
+                {
+                    body = cached;
+                    fromCache = true;
+                    if (announce)
+                        SetStatus("Сеть недоступна или лимит запросов. Загружаю сохранённый кэш. " + fetchEx.Message);
+                }
+                else
+                {
+                    var snapshot = SubscriptionSnapshotStore.TryLoad(input);
+                    if (snapshot is not null && snapshot.Count > 0)
+                    {
+                        _servers.Clear();
+                        _servers.AddRange(snapshot);
+                        foreach (var cfg in AmneziaWgConfigStore.ListImported())
+                            _servers.Add(cfg.ToProfile());
+                        ApplyNameOverrides();
+                        RefreshServerList();
+                        SelectLastServer();
+                        if (!quiet)
+                            SetStatus($"Не удалось обновить подписку — использую сохранённый список ({_servers.Count}).");
+                        return;
+                    }
 
-                body = cached;
-                fromCache = true;
-                if (announce)
-                    SetStatus("Сеть недоступна или лимит запросов. Загружаю сохранённый кэш. " + fetchEx.Message);
+                    throw;
+                }
             }
 
             var parsed = SubscriptionParser.Parse(body);
+            if (parsed.Count == 0)
+            {
+                var snapshot = SubscriptionSnapshotStore.TryLoad(input);
+                if (snapshot is not null && snapshot.Count > 0)
+                {
+                    _servers.Clear();
+                    _servers.AddRange(snapshot);
+                    foreach (var cfg in AmneziaWgConfigStore.ListImported())
+                        _servers.Add(cfg.ToProfile());
+                    ApplyNameOverrides();
+                    RefreshServerList();
+                    SelectLastServer();
+                    if (!quiet)
+                        SetStatus($"Подписка без серверов — использую сохранённый список ({_servers.Count}).");
+                    return;
+                }
+
+                if (!quiet)
+                    SetStatus("Серверы не найдены. Нужен список URI, base64-подписка или .conf AmneziaWG.");
+                return;
+            }
+
             foreach (var s in parsed)
                 s.IsWhitelistBypass = ServerClassifier.IsWhitelistBypass(s);
 
@@ -1074,7 +1167,7 @@ public partial class MainWindow : Window
                 _servers.Add(cfg.ToProfile());
             ApplyNameOverrides();
             RefreshServerList();
-
+            SubscriptionSnapshotStore.Save(input, _servers.Where(s => s.Protocol != "amneziawg"));
             _settings.SubscriptionInput = input;
             PersistSettings();
             UpdateSubscriptionInfo();
@@ -1103,6 +1196,22 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            var input = SubscriptionFetcher.NormalizeInput(_settings.SubscriptionInput ?? "");
+            var snapshot = SubscriptionSnapshotStore.TryLoad(input);
+            if (snapshot is not null && snapshot.Count > 0)
+            {
+                _servers.Clear();
+                _servers.AddRange(snapshot);
+                foreach (var cfg in AmneziaWgConfigStore.ListImported())
+                    _servers.Add(cfg.ToProfile());
+                ApplyNameOverrides();
+                RefreshServerList();
+                SelectLastServer();
+                if (!quiet)
+                    SetStatus($"Ошибка загрузки — использую сохранённый список ({_servers.Count}). {ex.Message}");
+                return;
+            }
+
             if (!quiet)
                 SetStatus("Ошибка загрузки: " + ex.Message);
         }
@@ -1209,6 +1318,41 @@ public partial class MainWindow : Window
 
     private async void PingButton_OnClick(object sender, RoutedEventArgs e) =>
         await PingAllServersAsync();
+
+    private async void DiagnosticsButton_OnClick(object sender, RoutedEventArgs e) =>
+        await RunSelectedServerDiagnosticsAsync();
+
+    private async Task RunSelectedServerDiagnosticsAsync()
+    {
+        if (ServerList.SelectedItem is not ServerProfile server)
+        {
+            SetStatus("Выберите сервер для диагностики.");
+            return;
+        }
+
+        SetStatus($"Диагностика «{server.Name}»…", important: false);
+        try
+        {
+            var connected = IsVpnConnected
+                            && _connectedServer is not null
+                            && string.Equals(_connectedServer.RawUri, server.RawUri, StringComparison.Ordinal);
+            int? port = connected && !_awgConnected
+                ? _activeCore == ProxyCoreKind.Xray ? _xray.ActivePort : _runner.ActiveMixedPort
+                : null;
+            var coreRunning = connected && !_awgConnected
+                && (_activeCore == ProxyCoreKind.Xray ? _xray.IsRunning : _runner.IsRunning);
+
+            var report = await ServerDiagnosticsService.RunAsync(
+                server, connected, coreRunning, port);
+
+            SetStatus($"Диагностика «{server.Name}»: {report.BuildSummary(connected)}");
+            _tray?.Notify(report.BuildSummary(connected));
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Ошибка диагностики: " + ex.Message);
+        }
+    }
 
     private async Task PingSelectedServerAsync()
     {
@@ -2298,7 +2442,11 @@ public partial class MainWindow : Window
         return new EngineOptions
         {
             MixedPort = EngineOptions.ClampPort(_settings.MixedPort),
-            TunStack = EngineOptions.NormalizeTunStack(_settings.TunStack)
+            TunStack = EngineOptions.NormalizeTunStack(_settings.TunStack),
+            DnsStrategy = _settings.DnsStrategy,
+            DnsRemoteServer = _settings.DnsRemoteServer,
+            DnsRemoteFallback = _settings.DnsRemoteFallback,
+            RejectQuicUdp443 = _settings.RejectQuicUdp443
         };
     }
 
@@ -2477,6 +2625,8 @@ public partial class MainWindow : Window
             // ignore
         }
 
+        _networkMonitor?.Dispose();
+        _networkMonitor = null;
         _awgConnected = false;
         _activeCore = ProxyCoreKind.SingBox;
         _runner.Dispose();
@@ -2489,11 +2639,13 @@ public partial class MainWindow : Window
         }
     }
 
-    private void SetStatus(string text)
+    private void SetStatus(string text, bool important = true)
     {
         StatusText.Text = text;
         AutomationProperties.SetName(StatusText, "Статус: " + text);
-        // Do not Focus() — steals keyboard from NVDA users mid-interaction
+        AutomationProperties.SetLiveSetting(
+            StatusText,
+            important ? AutomationLiveSetting.Assertive : AutomationLiveSetting.Polite);
         if (LooksLikeErrorStatus(text))
             AppLogService.Error(text);
     }

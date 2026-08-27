@@ -114,7 +114,11 @@ public sealed class XrayRunner : IDisposable
 
         var found = Directory.GetFiles(extract, "xray.exe", SearchOption.AllDirectories).FirstOrDefault()
                     ?? throw new FileNotFoundException("xray.exe не найден в архиве.");
-        File.Copy(found, ExePath, overwrite: true);
+        await BinaryUpdateHelper.InstallExecutableAsync(
+            ExePath,
+            found,
+            stopRunningAsync: StopAsync,
+            ct: ct).ConfigureAwait(false);
         foreach (var dat in new[] { "geoip.dat", "geosite.dat" })
         {
             var src = Directory.GetFiles(extract, dat, SearchOption.AllDirectories).FirstOrDefault();

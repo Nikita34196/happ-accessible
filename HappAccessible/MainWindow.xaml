@@ -34,6 +34,9 @@
                           AutomationProperties.Name="Проверить обновления ядер" />
                 <MenuItem Header="Проверить обновление _приложения" Click="MenuCheckAppUpdate_OnClick"
                           AutomationProperties.Name="Проверить обновление приложения через GitHub" />
+                <MenuItem Header="_Диагностика сервера" Click="DiagnosticsButton_OnClick"
+                          InputGestureText="Alt+D"
+                          AutomationProperties.Name="Диагностика выбранного сервера" />
                 <MenuItem Header="Открыть _логи…" Click="MenuOpenLogs_OnClick"
                           AutomationProperties.Name="Открыть файл логов ошибок"
                           AutomationProperties.HelpText="Ошибки и события обновления ядер пишутся в app.log" />
@@ -47,7 +50,7 @@
                    Margin="12,0,12,12"
                    TextWrapping="Wrap"
                    Focusable="True"
-                   AutomationProperties.LiveSetting="Assertive"
+                   AutomationProperties.LiveSetting="Polite"
                    AutomationProperties.Name="Статус"
                    Text="Готово. Alt — меню «Подписка»." />
 
@@ -69,6 +72,12 @@
                         MinWidth="110" MinHeight="32" Margin="0,0,8,0"
                         Click="PingButton_OnClick"
                         AutomationProperties.Name="Пинг всех серверов" />
+                <Button x:Name="DiagnosticsButton"
+                        Content="Диагностика (_D)"
+                        MinWidth="130" MinHeight="32" Margin="0,0,8,0"
+                        Click="DiagnosticsButton_OnClick"
+                        AutomationProperties.Name="Диагностика выбранного сервера"
+                        AutomationProperties.HelpText="TCP, туннель и DNS для выбранного сервера" />
                 <Button x:Name="CheckWhitelistButton"
                         Content="Проверить БС (_B)"
                         MinWidth="130" MinHeight="32" Margin="0,0,8,0"

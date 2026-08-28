@@ -266,21 +266,8 @@ public sealed class SubscriptionFetcher
         req.Headers.TryAddWithoutValidation("x-app-version", "3.3.6");
     }
 
-    private static void EnsureHwid(AppSettings settings)
-    {
-        if (!string.IsNullOrWhiteSpace(settings.DeviceHwid)
-            && settings.DeviceHwid.Length is >= 10 and <= 64)
-            return;
-
-        var bytes = RandomNumberGenerator.GetBytes(12);
-        settings.DeviceHwid = Convert.ToBase64String(bytes)
-            .Replace('+', '-')
-            .Replace('/', '_')
-            .TrimEnd('=');
-        if (settings.DeviceHwid.Length < 10)
-            settings.DeviceHwid = settings.DeviceHwid.PadRight(12, 'A');
-        settings.Save();
-    }
+    private static void EnsureHwid(AppSettings settings) =>
+        DeviceHwidService.EnsureHwid(settings);
 
     private static bool LooksLikeAppNotSupportedStub(string body)
     {

@@ -127,17 +127,7 @@ public static class SubscriptionParser
                 // ss://method:pass@host:port or ss://base64
                 var at = rest.LastIndexOf('@');
                 if (at < 0)
-                {
-                    name ??= "Shadowsocks";
-                    return new ServerProfile
-                    {
-                        Name = name,
-                        Protocol = "ss",
-                        RawUri = uri,
-                        Host = null,
-                        Port = 0
-                    };
-                }
+                    return null;
 
                 var hostPort = rest[(at + 1)..];
                 (host, port) = SplitHostPort(hostPort);
@@ -178,6 +168,9 @@ public static class SubscriptionParser
                 "wg" => "wireguard",
                 _ => scheme
             };
+            if (string.IsNullOrWhiteSpace(host) || port <= 0)
+                return null;
+
             name ??= $"{proto}://{host}:{port}";
 
             return new ServerProfile

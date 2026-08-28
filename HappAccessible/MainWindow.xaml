@@ -37,6 +37,8 @@
                 <MenuItem Header="_Диагностика сервера" Click="DiagnosticsButton_OnClick"
                           InputGestureText="Alt+D"
                           AutomationProperties.Name="Диагностика выбранного сервера" />
+                <MenuItem Header="Журнал _сессии" Click="MenuSessionJournal_OnClick"
+                          AutomationProperties.Name="Журнал последних событий сессии" />
                 <MenuItem Header="Открыть _логи…" Click="MenuOpenLogs_OnClick"
                           AutomationProperties.Name="Открыть файл логов ошибок"
                           AutomationProperties.HelpText="Ошибки и события обновления ядер пишутся в app.log" />
@@ -177,6 +179,18 @@
                           Unchecked="SettingsControl_Changed"
                           AutomationProperties.Name="Автообновление Happ Accessible с GitHub"
                           AutomationProperties.HelpText="Проверяет Releases репозитория и предлагает установить новую версию" />
+                <CheckBox x:Name="KillSwitchCheck"
+                          Content="Kill switch"
+                          Margin="0,0,16,0"
+                          Checked="SettingsControl_Changed"
+                          Unchecked="SettingsControl_Changed"
+                          AutomationProperties.Name="Kill switch — блокировать прямой трафик при обрыве VPN"
+                          AutomationProperties.HelpText="Требует права администратора (TUN). Блокирует интернет при неожиданном обрыве туннеля." />
+                <CheckBox x:Name="FavoritesOnlyCheck"
+                          Content="Только избранные (_F)"
+                          Checked="FavoritesOnlyCheck_Changed"
+                          Unchecked="FavoritesOnlyCheck_Changed"
+                          AutomationProperties.Name="Показывать только избранные серверы" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
@@ -265,8 +279,10 @@
                      KeyDown="ServerList_OnKeyDown"
                      SelectionChanged="ServerList_OnSelectionChanged">
                 <ListBox.ContextMenu>
-                    <ContextMenu>
+                    <ContextMenu Opened="ServerContextMenu_OnOpened">
                         <MenuItem Header="Пинг этого сервера" Click="MenuPingSelected_OnClick" />
+                        <MenuItem Header="Диагностика" Click="DiagnosticsButton_OnClick" />
+                        <MenuItem x:Name="MenuToggleFavorite" Header="В избранное" Click="MenuToggleFavorite_OnClick" />
                         <MenuItem Header="Переименовать…" Click="MenuRenameServer_OnClick" />
                         <MenuItem Header="Сбросить имя" Click="MenuResetServerName_OnClick" />
                         <Separator />

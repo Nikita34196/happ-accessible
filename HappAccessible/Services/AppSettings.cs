@@ -52,6 +52,10 @@ public sealed class AppSettings
     public bool RejectQuicUdp443 { get; set; } = true;
     /// <summary>Proactively restart tunnel every N minutes (0 = off).</summary>
     public int SessionRefreshMinutes { get; set; } = 90;
+    /// <summary>Block direct traffic when VPN session drops unexpectedly.</summary>
+    public bool KillSwitchEnabled { get; set; }
+    /// <summary>Chrome Secure DNS hint shown once when using system proxy.</summary>
+    public bool DoHHintShown { get; set; }
 
     /// <summary>Remnawave panel base URL for in-app admin (e.g. https://host.sslip.io).</summary>
     public string? RemnawavePanelUrl { get; set; }
@@ -60,6 +64,10 @@ public sealed class AppSettings
 
     /// <summary>Custom display names keyed by RawUri.</summary>
     public Dictionary<string, string> ServerNameOverrides { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>Favorite servers by RawUri.</summary>
+    public HashSet<string> FavoriteServerUris { get; set; } = new(StringComparer.Ordinal);
+    /// <summary>Unix UTC seconds of last successful connect per RawUri.</summary>
+    public Dictionary<string, long> ServerLastSuccessUtc { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>Last successful subscription fetch (UTC).</summary>
     public DateTimeOffset? SubscriptionLastUpdateUtc { get; set; }
@@ -88,12 +96,22 @@ public sealed class AppSettings
     {
         try
         {
-            var path = SettingsPath;
-            if (!File.Exists(path))
-                return new AppSettings();
-            var json = File.ReadAllText(path);
-            var loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            AppSettings loaded;
+            if (!File.Exists(SettingsPath))
+            {
+                loaded = new AppSettings();
+            }
+            else
+            {
+                var json = File.ReadAllText(SettingsPath);
+                loaded = JsonSerializer.Deserialize<AppSettings>(json, JsonOptions) ?? new AppSettings();
+            }
+
             loaded.ServerNameOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+            loaded.FavoriteServerUris ??= new HashSet<string>(StringComparer.Ordinal);
+            loaded.ServerLastSuccessUtc ??= new Dictionary<string, long>(StringComparer.Ordinal);
+            ProtectedSettingsStore.LoadInto(loaded);
+            DeviceHwidService.EnsureHwid(loaded);
             return loaded;
         }
         catch
@@ -108,12 +126,29 @@ public sealed class AppSettings
     {
         lock (SaveLock)
         {
-            var dir = Path.GetDirectoryName(SettingsPath)!;
-            Directory.CreateDirectory(dir);
-            var tmp = SettingsPath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(this, JsonOptions));
-            File.Copy(tmp, SettingsPath, overwrite: true);
-            try { File.Delete(tmp); } catch { /* ignore */ }
+            ProtectedSettingsStore.SaveFrom(this);
+
+            var sub = SubscriptionInput;
+            var token = RemnawaveApiToken;
+            var panel = RemnawavePanelUrl;
+            SubscriptionInput = "";
+            RemnawaveApiToken = null;
+            RemnawavePanelUrl = null;
+
+            try
+            {
+                var dir = Path.GetDirectoryName(SettingsPath)!;
+                Directory.CreateDirectory(dir);
+                var tmp = SettingsPath + ".tmp";
+                File.WriteAllText(tmp, JsonSerializer.Serialize(this, JsonOptions));
+                File.Move(tmp, SettingsPath, overwrite: true);
+            }
+            finally
+            {
+                SubscriptionInput = sub;
+                RemnawaveApiToken = token;
+                RemnawavePanelUrl = panel;
+            }
         }
     }
 }

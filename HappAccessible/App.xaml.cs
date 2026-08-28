@@ -51,5 +51,18 @@ public partial class App : System.Windows.Application
     private void App_DispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
         AppLogService.Error("Необработанное исключение UI", e.Exception);
+        e.Handled = true;
+        try
+        {
+            System.Windows.MessageBox.Show(
+                "Произошла ошибка: " + e.Exception.Message,
+                "Happ Accessible",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+        catch
+        {
+            // ignore secondary UI failure
+        }
     }
 }

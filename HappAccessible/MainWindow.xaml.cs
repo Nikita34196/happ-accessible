@@ -18,7 +18,9 @@ public partial class MainWindow : Window
     private readonly AmneziaWgRunner _awg = new();
     private readonly SystemProxyService _proxy = new();
     private readonly CoreUpdateService _coreUpdates = new();
-    private readonly AppUpdateService _appUpdates = new();
+    private readonly AppUpdateCoordinator _appUpdates = new();
+    private readonly SessionHealthMonitor _healthMonitor = new();
+    private readonly KillSwitchService _killSwitch = new();
     private readonly List<ServerProfile> _servers = [];
     private readonly AppSettings _settings;
     private TrayService? _tray;
@@ -30,7 +32,6 @@ public partial class MainWindow : Window
     private DispatcherTimer? _subUpdateTimer;
     private DispatcherTimer? _healthTimer;
     private bool _failoverBusy;
-    private int _healthFailStreak;
     private bool _connectBusy;
     private bool _awgConnected;
     private bool _healthTickRunning;
@@ -40,7 +41,8 @@ public partial class MainWindow : Window
     private NetworkChangeMonitor? _networkMonitor;
     private bool _networkRecoveryBusy;
     private DateTime _sessionConnectedUtc;
-    private int _healthTickCount;
+    private bool _showFavoritesOnly;
+    private bool _manualDisconnect;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public static void ActivateExistingInstance()
@@ -107,6 +109,8 @@ public partial class MainWindow : Window
         SelectProxyCore(_settings.ProxyCore);
         AutoUpdateCoresCheck.IsChecked = _settings.AutoUpdateCores;
         AutoUpdateAppCheck.IsChecked = _settings.AutoUpdateApp;
+        if (KillSwitchCheck is not null)
+            KillSwitchCheck.IsChecked = _settings.KillSwitchEnabled;
         SelectRoutingMode(_settings.RoutingMode);
         UpdateDomainListVisibility();
         UpdateSubscriptionInfo();
@@ -261,7 +265,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await ApplyAppUpdateAsync(info, silent: true);
+            await ApplyAppUpdateAsync(info, silent: false);
         }
         catch (Exception ex)
         {
@@ -271,43 +275,36 @@ public partial class MainWindow : Window
 
     private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool silent)
     {
-        var progress = new Progress<string>(msg => SetStatus(msg, important: false));
-
-        if (!string.IsNullOrEmpty(info.PortableZipUrl) && AppUpdateService.CanSelfUpdateInPlace())
+        if (!silent)
         {
-            var script = await _appUpdates.PreparePortableUpdateAsync(info, progress);
+            var confirm = System.Windows.MessageBox.Show(
+                this,
+                $"Доступна версия {info.LatestVersion} (сейчас {info.CurrentVersion}).\n\n" +
+                "Установить сейчас? Приложение перезапустится.",
+                "Обновление Happ Accessible",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question);
+            if (confirm != MessageBoxResult.Yes)
+                return;
+        }
+
+        var progress = new Progress<string>(msg => SetStatus(msg, important: !silent));
+        try
+        {
+            await _appUpdates.ApplyAsync(info, silent, progress);
             var msg = $"Обновление до {info.LatestVersion}. Приложение перезапустится.";
             SetStatus(msg, important: !silent);
             _tray?.Notify(msg);
-            AppUpdateService.LaunchUpdaterScript(script);
             _exitRequested = true;
             Cleanup(persistFromUi: false);
             System.Windows.Application.Current.Shutdown();
-            return;
         }
-
-        if (!string.IsNullOrEmpty(info.SetupExeUrl))
+        catch (Exception ex)
         {
-            var setup = await _appUpdates.DownloadSetupAsync(info, progress);
-            var msg = $"Тихое обновление до {info.LatestVersion}…";
-            SetStatus(msg, important: !silent);
-            _tray?.Notify(msg);
-            AppUpdateService.LaunchSetupSilent(setup);
-            _exitRequested = true;
-            Cleanup(persistFromUi: false);
-            System.Windows.Application.Current.Shutdown();
-            return;
+            SetStatus("Обновление: " + ex.Message);
+            if (!silent)
+                System.Windows.MessageBox.Show(this, ex.Message, "Обновление", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
-
-        if (!string.IsNullOrEmpty(info.PortableZipUrl))
-        {
-            SetStatus(
-                $"Обновление {info.LatestVersion}: папка приложения недоступна для записи. " +
-                $"Скачайте portable zip: {info.ReleaseUrl}");
-            return;
-        }
-
-        SetStatus($"Обновление {info.LatestVersion}: скачайте вручную — {info.ReleaseUrl}");
     }
 
     private async Task CheckAndUpdateCoresOnStartupAsync()
@@ -412,6 +409,16 @@ public partial class MainWindow : Window
     private void LogsButton_OnClick(object sender, RoutedEventArgs e) => OpenLogs();
 
     private void MenuOpenLogs_OnClick(object sender, RoutedEventArgs e) => OpenLogs();
+
+    private void MenuSessionJournal_OnClick(object sender, RoutedEventArgs e)
+    {
+        System.Windows.MessageBox.Show(
+            this,
+            SessionJournalService.FormatRecentForDisplay(),
+            "Журнал сессии",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
 
     private void OpenLogs()
     {
@@ -538,63 +545,44 @@ public partial class MainWindow : Window
 
     private async Task HealthCheckTickAsync(bool forceImmediate = false)
     {
-        if (_connectBusy || _failoverBusy || !IsVpnConnected)
-            return;
-
-        if (_awgConnected || _connectedServer?.Protocol == "amneziawg")
-            return;
-
-        if (_connectedServer is null)
-            return;
-
-        _healthTickCount++;
-        if (_healthTickCount % 20 == 0 && SystemProxyCheck.IsChecked == true)
-            _proxy.RefreshIfOwned();
-
-        var refreshMinutes = Math.Clamp(_settings.SessionRefreshMinutes, 0, 720);
-        if (refreshMinutes > 0
-            && _sessionConnectedUtc != default
-            && DateTime.UtcNow - _sessionConnectedUtc >= TimeSpan.FromMinutes(refreshMinutes))
+        var ctx = new HealthTickContext
         {
-            await RefreshSessionAsync();
-            return;
-        }
+            IsBusy = _connectBusy || _failoverBusy,
+            IsConnected = IsVpnConnected,
+            IsAmnezia = _awgConnected || _connectedServer?.Protocol == "amneziawg",
+            AwgTunnelRunning = _awg.IsTunnelRunning,
+            CoreRunning = _activeCore == ProxyCoreKind.Xray ? _xray.IsRunning : _runner.IsRunning,
+            SystemProxyEnabled = SystemProxyCheck.IsChecked == true,
+            MixedPort = GetEngineOptions().MixedPort,
+            SessionRefreshMinutes = _settings.SessionRefreshMinutes,
+            SessionConnectedUtc = _sessionConnectedUtc,
+            RoutingModeTag = GetSelectedRoutingModeTag(),
+            ConnectedServer = _connectedServer,
+            RefreshProxy = () => _proxy.RefreshIfOwned(),
+            ProbeFullSessionAsync = async () =>
+            {
+                if (_activeCore == ProxyCoreKind.Xray)
+                    return await _xray.ProbeSessionHealthAsync();
+                return await _runner.ProbeSessionHealthAsync();
+            }
+        };
 
-        var coreAlive = _activeCore == ProxyCoreKind.Xray ? _xray.IsRunning : _runner.IsRunning;
-        if (!coreAlive)
+        var result = await _healthMonitor.RunTickAsync(ctx, forceImmediate);
+        if (_connectBusy || _failoverBusy)
+            return;
+
+        switch (result.ResultKind)
         {
-            await HandleSessionFailureAsync("ядро прокси завершилось");
-            return;
+            case HealthTickResult.Kind.RefreshSession:
+                await RefreshSessionAsync();
+                break;
+            case HealthTickResult.Kind.Retry:
+                SetStatus($"Проверка связи: {result.Detail}. Повторю…", important: false);
+                break;
+            case HealthTickResult.Kind.Failure:
+                await HandleSessionFailureAsync(result.Detail ?? "сессия не отвечает");
+                break;
         }
-
-        var skipHttpProbe = !forceImmediate
-                            && GetSelectedRoutingModeTag() is "proxy-list" or "app-proxy" or "app-bypass";
-        if (skipHttpProbe)
-        {
-            _healthFailStreak = 0;
-            return;
-        }
-
-        var (ok, detail) = _activeCore == ProxyCoreKind.Xray
-            ? await _xray.ProbeSessionHealthAsync()
-            : await _runner.ProbeSessionHealthAsync();
-        if (_connectBusy || _failoverBusy || _connectedServer is null)
-            return;
-        if (ok)
-        {
-            _healthFailStreak = 0;
-            return;
-        }
-
-        _healthFailStreak++;
-        if (_healthFailStreak < 2)
-        {
-            SetStatus($"Проверка связи: {detail}. Повторю…", important: false);
-            return;
-        }
-
-        _healthFailStreak = 0;
-        await HandleSessionFailureAsync($"туннель не отвечает ({detail})");
     }
 
     private async Task RefreshSessionAsync()
@@ -603,15 +591,22 @@ public partial class MainWindow : Window
             return;
 
         var server = _connectedServer;
+        _sessionConnectedUtc = DateTime.UtcNow;
+
         SetStatus($"Профилактика: обновляю туннель «{server.Name}»…", important: false);
         _tray?.Notify($"Обновление туннеля: {server.Name}");
+        SessionJournalService.Record($"Профилактический refresh: {server.Name}.");
 
+        var epoch = _sessionEpoch;
         var outcome = await TryConnectServerAsync(server);
         if (outcome == ConnectOutcome.Success)
         {
-            _sessionConnectedUtc = DateTime.UtcNow;
             SetStatus($"Туннель обновлён: {server.Name}.", important: false);
+            return;
         }
+
+        if (epoch == _sessionEpoch)
+            await HandleSessionFailureAsync("Не удалось обновить сессию после проактивного refresh.");
     }
 
     private async Task HandleSessionFailureAsync(string reason)
@@ -621,6 +616,7 @@ public partial class MainWindow : Window
 
         var failed = _connectedServer;
         var failedUri = failed.RawUri;
+        SessionJournalService.Record($"Сбой сессии: {reason} ({failed.Name}).");
 
         if (_settings.AutoWhitelistFailover && failed.Protocol != "amneziawg")
         {
@@ -632,7 +628,7 @@ public partial class MainWindow : Window
         SetStatus($"Проверка связи: {reason} ({failed.Name}). Переподключаюсь…");
         _tray?.Notify($"Переподключение: {failed.Name}");
 
-        await DisconnectAsync();
+        await DisconnectAsync(manual: false);
 
         var server = _servers.FirstOrDefault(s => s.RawUri == failedUri);
         if (server is null)
@@ -2010,13 +2006,12 @@ public partial class MainWindow : Window
 
             _connectedServer = server;
             _activeCore = ProxyCoreKind.SingBox;
-            _healthFailStreak = 0;
-            _sessionConnectedUtc = DateTime.UtcNow;
             _settings.LastServerUri = server.RawUri;
             _settings.LastServerName = server.Name;
             ServerList.SelectedItem = server;
             CaptureSettingsFromUi();
             PersistSettings();
+            RecordConnectSuccess(server);
 
             var mode = useTun
                 ? $"TUN/{engine.TunStack}"
@@ -2113,13 +2108,12 @@ public partial class MainWindow : Window
 
             _connectedServer = server;
             _activeCore = ProxyCoreKind.Xray;
-            _healthFailStreak = 0;
-            _sessionConnectedUtc = DateTime.UtcNow;
             _settings.LastServerUri = server.RawUri;
             _settings.LastServerName = server.Name;
             ServerList.SelectedItem = server;
             CaptureSettingsFromUi();
             PersistSettings();
+            RecordConnectSuccess(server);
 
             var core = string.IsNullOrWhiteSpace(_xray.CoreVersion) ? "Xray" : $"Xray {_xray.CoreVersion}";
             var mode = useProxy
@@ -2197,12 +2191,12 @@ public partial class MainWindow : Window
 
             _awgConnected = true;
             _connectedServer = server;
-            _healthFailStreak = 0;
             _settings.LastServerUri = server.RawUri;
             _settings.LastServerName = server.Name;
             ServerList.SelectedItem = server;
             CaptureSettingsFromUi();
             PersistSettings();
+            RecordConnectSuccess(server);
 
             string msg;
             if (probeOk)
@@ -2302,7 +2296,7 @@ public partial class MainWindow : Window
             _tray?.SetTooltip("Happ Accessible — нет связи");
             _tray?.Notify("Нет связи — отключено");
             if (IsVpnConnected)
-                await DisconnectAsync();
+                await DisconnectAsync(manual: false);
         }
         finally
         {
@@ -2316,13 +2310,17 @@ public partial class MainWindow : Window
         return s.Length <= 160 ? s : s[^160..];
     }
 
-    private async Task DisconnectAsync()
+    private async Task DisconnectAsync(bool manual = true)
     {
         try
         {
             _sessionEpoch++;
-            _healthFailStreak = 0;
+            _healthMonitor.ResetFailStreak();
             _sessionConnectedUtc = default;
+            if (manual && _settings.KillSwitchEnabled)
+                _killSwitch.Disarm();
+            _manualDisconnect = manual;
+
             _proxy.DisableIfOwned();
             await _runner.StopAsync();
             await _xray.StopAsync();
@@ -2331,6 +2329,7 @@ public partial class MainWindow : Window
             _awgConnected = false;
             _connectedServer = null;
             _activeCore = ProxyCoreKind.SingBox;
+            SessionJournalService.Record(manual ? "Отключено вручную." : "Отключено (авто).");
             SetStatus("Отключено.");
             UpdateConnectToggleUi();
             _tray?.SetTooltip("Happ Accessible — не подключено");
@@ -2341,6 +2340,94 @@ public partial class MainWindow : Window
             SetStatus("Ошибка отключения: " + ex.Message);
             UpdateConnectToggleUi();
         }
+    }
+
+    private void RecordConnectSuccess(ServerProfile server)
+    {
+        _sessionConnectedUtc = DateTime.UtcNow;
+        _healthMonitor.ResetFailStreak();
+        _manualDisconnect = false;
+
+        var unix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        _settings.ServerLastSuccessUtc[server.RawUri] = unix;
+        server.LastSuccessUtc = DateTimeOffset.FromUnixTimeSeconds(unix);
+
+        SessionJournalService.Record($"Подключено: {server.Name}.");
+        ApplyNameOverrides();
+        RefreshServerList();
+
+        if (_settings.KillSwitchEnabled && ElevationHelper.IsElevated)
+            _killSwitch.Arm(GetActiveCoreExePath());
+
+        MaybeShowDoHHint();
+    }
+
+    private string? GetActiveCoreExePath()
+    {
+        if (_awgConnected)
+            return _awg.ExePath;
+        if (_activeCore == ProxyCoreKind.Xray && File.Exists(_xray.ExePath))
+            return _xray.ExePath;
+
+        var sb = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HappAccessible", "tools", "sing-box.exe");
+        return File.Exists(sb) ? sb : null;
+    }
+
+    private void MaybeShowDoHHint()
+    {
+        if (_settings.DoHHintShown || SystemProxyCheck.IsChecked != true)
+            return;
+
+        _settings.DoHHintShown = true;
+        PersistSettings();
+        System.Windows.MessageBox.Show(
+            this,
+            "При системном прокси Chrome может игнорировать прокси из‑за «Безопасного DNS».\n\n" +
+            "Отключите Secure DNS в chrome://settings/security или используйте TUN.",
+            "Подсказка: DNS в Chrome",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+    }
+
+    private void ServerContextMenu_OnOpened(object sender, RoutedEventArgs e)
+    {
+        if (MenuToggleFavorite is null)
+            return;
+
+        if (ServerList.SelectedItem is ServerProfile s && s.IsFavorite)
+            MenuToggleFavorite.Header = "Убрать из избранного";
+        else
+            MenuToggleFavorite.Header = "В избранное";
+    }
+
+    private void MenuToggleFavorite_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (ServerList.SelectedItem is not ServerProfile s)
+            return;
+
+        _settings.FavoriteServerUris ??= new HashSet<string>(StringComparer.Ordinal);
+        if (_settings.FavoriteServerUris.Contains(s.RawUri))
+            _settings.FavoriteServerUris.Remove(s.RawUri);
+        else
+            _settings.FavoriteServerUris.Add(s.RawUri);
+
+        ApplyNameOverrides();
+        RefreshServerList();
+        PersistSettings();
+        SetStatus(_settings.FavoriteServerUris.Contains(s.RawUri)
+            ? $"«{s.Name}» добавлен в избранное."
+            : $"«{s.Name}» убран из избранного.");
+    }
+
+    private void FavoritesOnlyCheck_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_loadingUi)
+            return;
+
+        _showFavoritesOnly = FavoritesOnlyCheck?.IsChecked == true;
+        RefreshServerList();
     }
 
     private void CaptureSettingsFromUi()
@@ -2364,6 +2451,8 @@ public partial class MainWindow : Window
         _settings.ProxyCore = GetSelectedProxyCoreSetting();
         _settings.AutoUpdateCores = AutoUpdateCoresCheck.IsChecked == true;
         _settings.AutoUpdateApp = AutoUpdateAppCheck.IsChecked == true;
+        if (KillSwitchCheck is not null)
+            _settings.KillSwitchEnabled = KillSwitchCheck.IsChecked == true;
         _settings.AutoConnect = AutoConnectCheck.IsChecked == true;
         _settings.StartMinimizedToTray = StartMinimizedCheck.IsChecked == true;
         _settings.AutoUpdateSubscription = AutoUpdateSubCheck.IsChecked == true;
@@ -2573,11 +2662,22 @@ public partial class MainWindow : Window
     private void RefreshServerList()
     {
         var selectedUri = (ServerList.SelectedItem as ServerProfile)?.RawUri;
+        IEnumerable<ServerProfile> list = _servers;
+
+        if (_showFavoritesOnly)
+            list = list.Where(s => s.IsFavorite);
+
+        var sorted = list
+            .OrderByDescending(s => s.IsFavorite)
+            .ThenByDescending(s => s.LastSuccessUtc ?? DateTimeOffset.MinValue)
+            .ThenBy(s => s.Name, StringComparer.CurrentCultureIgnoreCase)
+            .ToList();
+
         ServerList.ItemsSource = null;
-        ServerList.ItemsSource = _servers.ToList();
+        ServerList.ItemsSource = sorted;
         if (selectedUri is not null)
         {
-            var again = _servers.FirstOrDefault(s => s.RawUri == selectedUri);
+            var again = sorted.FirstOrDefault(s => s.RawUri == selectedUri);
             if (again is not null)
                 ServerList.SelectedItem = again;
         }
@@ -2586,6 +2686,9 @@ public partial class MainWindow : Window
     private void ApplyNameOverrides()
     {
         _settings.ServerNameOverrides ??= new Dictionary<string, string>(StringComparer.Ordinal);
+        _settings.FavoriteServerUris ??= new HashSet<string>(StringComparer.Ordinal);
+        _settings.ServerLastSuccessUtc ??= new Dictionary<string, long>(StringComparer.Ordinal);
+
         foreach (var s in _servers)
         {
             s.OriginalName ??= s.Name;
@@ -2594,6 +2697,12 @@ public partial class MainWindow : Window
             {
                 s.Name = custom.Trim();
             }
+
+            s.IsFavorite = _settings.FavoriteServerUris.Contains(s.RawUri);
+            if (_settings.ServerLastSuccessUtc.TryGetValue(s.RawUri, out var unix))
+                s.LastSuccessUtc = DateTimeOffset.FromUnixTimeSeconds(unix);
+            else
+                s.LastSuccessUtc = null;
         }
     }
 
@@ -2663,6 +2772,7 @@ public partial class MainWindow : Window
 
         _networkMonitor?.Dispose();
         _networkMonitor = null;
+        _killSwitch.Disarm();
         _awgConnected = false;
         _activeCore = ProxyCoreKind.SingBox;
         _runner.Dispose();

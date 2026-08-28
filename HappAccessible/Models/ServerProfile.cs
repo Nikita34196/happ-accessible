@@ -15,6 +15,9 @@ public sealed class ServerProfile
     /// <summary>Set by UI when classifying whitelist-bypass nodes.</summary>
     public bool IsWhitelistBypass { get; set; }
 
+    public bool IsFavorite { get; set; }
+    public DateTimeOffset? LastSuccessUtc { get; set; }
+
     public string DisplayName
     {
         get
@@ -22,8 +25,12 @@ public sealed class ServerProfile
             var ping = LatencyMs is null ? "нет ответа TCP"
                 : LatencyMs < 0 ? "…"
                 : $"TCP {LatencyMs} мс";
+            var fav = IsFavorite ? "★, " : "";
             var mark = IsWhitelistBypass ? "обход БС, " : "";
-            return $"{Name} ({mark}{Protocol}, {ping})";
+            var when = LastSuccessUtc is { } ok
+                ? $", успех {ok.LocalDateTime:dd.MM HH:mm}"
+                : "";
+            return $"{Name} ({fav}{mark}{Protocol}, {ping}{when})";
         }
     }
 

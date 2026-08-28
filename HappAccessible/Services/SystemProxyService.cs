@@ -75,10 +75,6 @@ public sealed class SystemProxyService
         _hadOverride = _prevOverride is not null;
 
         _ourServer = $"{host}:{port}";
-        key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
-        key.SetValue("ProxyServer", _ourServer, RegistryValueKind.String);
-        key.SetValue("ProxyOverride", "localhost;127.*;10.*;192.168.*;<local>", RegistryValueKind.String);
-        _weEnabled = true;
 
         ProxySessionStore.Save(new ProxySessionStore.Session
         {
@@ -88,6 +84,11 @@ public sealed class SystemProxyService
             PrevOverride = _prevOverride,
             HadOverride = _hadOverride
         });
+
+        key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
+        key.SetValue("ProxyServer", _ourServer, RegistryValueKind.String);
+        key.SetValue("ProxyOverride", "localhost;127.*;10.*;192.168.*;<local>", RegistryValueKind.String);
+        _weEnabled = true;
 
         NotifyChanged();
     }

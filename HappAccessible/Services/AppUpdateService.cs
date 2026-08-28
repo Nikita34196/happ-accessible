@@ -170,27 +170,18 @@ public sealed class AppUpdateService
 
         var targetDir = Path.GetFullPath(AppContext.BaseDirectory.TrimEnd('\\', '/'));
         var pid = Environment.ProcessId;
-        var script = Path.Combine(updateRoot, "apply-update.cmd");
-        var lines = new[]
-        {
-            "@echo off",
-            "chcp 65001 >nul",
-            $"set TARGET={QuoteCmd(targetDir)}",
-            $"set SOURCE={QuoteCmd(payload)}",
-            $"set PID={pid}",
-            ":wait",
-            "tasklist /FI \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul",
-            "if not errorlevel 1 (",
-            "  timeout /t 1 /nobreak >nul",
-            "  goto wait",
-            ")",
-            "timeout /t 1 /nobreak >nul",
-            "xcopy \"%SOURCE%\\*\" \"%TARGET%\\\" /E /Y /Q /I >nul",
-            "if errorlevel 1 exit /b 1",
-            "start \"\" \"%TARGET%\\HappAccessible.exe\"",
-            "exit /b 0"
-        };
-        await File.WriteAllLinesAsync(script, lines, ct).ConfigureAwait(false);
+        var script = Path.Combine(updateRoot, "apply-update.ps1");
+        var ps1 = $@"
+$ErrorActionPreference = 'Stop'
+$target = '{targetDir.Replace("'", "''")}'
+$source = '{payload.Replace("'", "''")}'
+$pidToWait = {pid}
+while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}
+Start-Sleep -Seconds 1
+Copy-Item -Path (Join-Path $source '*') -Destination $target -Recurse -Force
+Start-Process -FilePath (Join-Path $target 'HappAccessible.exe')
+";
+        await File.WriteAllTextAsync(script, ps1, ct).ConfigureAwait(false);
         progress?.Report("Обновление готово. Приложение перезапустится.");
         return script;
     }
@@ -219,10 +210,11 @@ public sealed class AppUpdateService
     {
         Process.Start(new ProcessStartInfo
         {
-            FileName = scriptPath,
-            UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(scriptPath)!,
-            WindowStyle = ProcessWindowStyle.Hidden
+            FileName = "powershell.exe",
+            Arguments = $"-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File \"{scriptPath}\"",
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            WorkingDirectory = Path.GetDirectoryName(scriptPath)!
         });
     }
 

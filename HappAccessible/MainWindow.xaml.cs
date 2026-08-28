@@ -39,6 +39,8 @@ public partial class MainWindow : Window
     private bool _remnawaveAdminUnlockedThisSession;
     private NetworkChangeMonitor? _networkMonitor;
     private bool _networkRecoveryBusy;
+    private DateTime _sessionConnectedUtc;
+    private int _healthTickCount;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public static void ActivateExistingInstance()
@@ -129,6 +131,9 @@ public partial class MainWindow : Window
         _tray.ExitRequested += () => Dispatcher.Invoke(ExitApp);
         _tray.SetTooltip("Happ Accessible — не подключено");
         UpdateConnectToggleUi();
+
+        _runner.CoreExited += OnCoreProcessExited;
+        _xray.CoreExited += OnCoreProcessExited;
 
         // Recover from crash: leftover system proxy / AmneziaWG tunnel
         _proxy.ClearStaleOwnedProxy(_settings.MixedPort, EngineOptions.DefaultMixedPort, 10808);
@@ -232,7 +237,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await ApplyAppUpdateAsync(info, announce: true);
+            await ApplyAppUpdateAsync(info, silent: true);
         }
         catch (Exception ex)
         {
@@ -256,7 +261,7 @@ public partial class MainWindow : Window
                 return;
             }
 
-            await ApplyAppUpdateAsync(info, announce: true);
+            await ApplyAppUpdateAsync(info, silent: true);
         }
         catch (Exception ex)
         {
@@ -264,57 +269,45 @@ public partial class MainWindow : Window
         }
     }
 
-    private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool announce)
+    private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool silent)
     {
-        var progress = new Progress<string>(msg => SetStatus(msg));
-        if (AppUpdateService.IsRunningFromInstallDir() && !string.IsNullOrEmpty(info.SetupExeUrl))
-        {
-            var setup = await _appUpdates.DownloadSetupAsync(info, progress);
-            var answer = System.Windows.MessageBox.Show(
-                this,
-                $"Скачан установщик {info.LatestVersion}.\nЗапустить сейчас? Приложение закроется.",
-                "Обновление Happ Accessible",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
-            {
-                SetStatus($"Установщик сохранён: {setup}");
-                return;
-            }
+        var progress = new Progress<string>(msg => SetStatus(msg, important: false));
 
-            AppUpdateService.LaunchSetup(setup);
+        if (!string.IsNullOrEmpty(info.PortableZipUrl) && AppUpdateService.CanSelfUpdateInPlace())
+        {
+            var script = await _appUpdates.PreparePortableUpdateAsync(info, progress);
+            var msg = $"Обновление до {info.LatestVersion}. Приложение перезапустится.";
+            SetStatus(msg, important: !silent);
+            _tray?.Notify(msg);
+            AppUpdateService.LaunchUpdaterScript(script);
             _exitRequested = true;
             Cleanup(persistFromUi: false);
             System.Windows.Application.Current.Shutdown();
             return;
         }
 
-        if (string.IsNullOrEmpty(info.PortableZipUrl))
+        if (!string.IsNullOrEmpty(info.SetupExeUrl))
         {
-            SetStatus($"Обновление {info.LatestVersion}: скачайте вручную — {info.ReleaseUrl}");
+            var setup = await _appUpdates.DownloadSetupAsync(info, progress);
+            var msg = $"Тихое обновление до {info.LatestVersion}…";
+            SetStatus(msg, important: !silent);
+            _tray?.Notify(msg);
+            AppUpdateService.LaunchSetupSilent(setup);
+            _exitRequested = true;
+            Cleanup(persistFromUi: false);
+            System.Windows.Application.Current.Shutdown();
             return;
         }
 
-        var script = await _appUpdates.PreparePortableUpdateAsync(info, progress);
-        if (announce)
+        if (!string.IsNullOrEmpty(info.PortableZipUrl))
         {
-            var answer = System.Windows.MessageBox.Show(
-                this,
-                $"Готово обновление до {info.LatestVersion}.\nПерезапустить приложение сейчас?",
-                "Обновление Happ Accessible",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes)
-            {
-                SetStatus($"Обновление подготовлено. Запустите позже: {script}");
-                return;
-            }
+            SetStatus(
+                $"Обновление {info.LatestVersion}: папка приложения недоступна для записи. " +
+                $"Скачайте portable zip: {info.ReleaseUrl}");
+            return;
         }
 
-        AppUpdateService.LaunchUpdaterScript(script);
-        _exitRequested = true;
-        Cleanup(persistFromUi: false);
-        System.Windows.Application.Current.Shutdown();
+        SetStatus($"Обновление {info.LatestVersion}: скачайте вручную — {info.ReleaseUrl}");
     }
 
     private async Task CheckAndUpdateCoresOnStartupAsync()
@@ -459,7 +452,7 @@ public partial class MainWindow : Window
 
         _healthTimer = new DispatcherTimer
         {
-            Interval = TimeSpan.FromSeconds(75)
+            Interval = TimeSpan.FromSeconds(45)
         };
         _healthTimer.Tick += async (_, _) =>
         {
@@ -499,6 +492,16 @@ public partial class MainWindow : Window
             _networkRecoveryBusy = false;
             _networkMonitor?.ResetBackoff();
         }
+    }
+
+    private void OnCoreProcessExited()
+    {
+        Dispatcher.InvokeAsync(async () =>
+        {
+            if (_connectBusy || _failoverBusy || !IsVpnConnected || _awgConnected)
+                return;
+            await HandleSessionFailureAsync("ядро прокси неожиданно завершилось");
+        });
     }
 
     private async Task AutoUpdateSubscriptionTickAsync()
@@ -544,6 +547,19 @@ public partial class MainWindow : Window
         if (_connectedServer is null)
             return;
 
+        _healthTickCount++;
+        if (_healthTickCount % 20 == 0 && SystemProxyCheck.IsChecked == true)
+            _proxy.RefreshIfOwned();
+
+        var refreshMinutes = Math.Clamp(_settings.SessionRefreshMinutes, 0, 720);
+        if (refreshMinutes > 0
+            && _sessionConnectedUtc != default
+            && DateTime.UtcNow - _sessionConnectedUtc >= TimeSpan.FromMinutes(refreshMinutes))
+        {
+            await RefreshSessionAsync();
+            return;
+        }
+
         var coreAlive = _activeCore == ProxyCoreKind.Xray ? _xray.IsRunning : _runner.IsRunning;
         if (!coreAlive)
         {
@@ -559,9 +575,9 @@ public partial class MainWindow : Window
             return;
         }
 
-        var ok = _activeCore == ProxyCoreKind.Xray
-            ? await _xray.ProbeConnectivityAsync()
-            : await _runner.ProbeConnectivityAsync();
+        var (ok, detail) = _activeCore == ProxyCoreKind.Xray
+            ? await _xray.ProbeSessionHealthAsync()
+            : await _runner.ProbeSessionHealthAsync();
         if (_connectBusy || _failoverBusy || _connectedServer is null)
             return;
         if (ok)
@@ -573,12 +589,29 @@ public partial class MainWindow : Window
         _healthFailStreak++;
         if (_healthFailStreak < 2)
         {
-            SetStatus("Проверка связи: сбой, повторю ещё раз…", important: false);
+            SetStatus($"Проверка связи: {detail}. Повторю…", important: false);
             return;
         }
 
         _healthFailStreak = 0;
-        await HandleSessionFailureAsync("туннель не отвечает");
+        await HandleSessionFailureAsync($"туннель не отвечает ({detail})");
+    }
+
+    private async Task RefreshSessionAsync()
+    {
+        if (_connectBusy || _failoverBusy || _connectedServer is null)
+            return;
+
+        var server = _connectedServer;
+        SetStatus($"Профилактика: обновляю туннель «{server.Name}»…", important: false);
+        _tray?.Notify($"Обновление туннеля: {server.Name}");
+
+        var outcome = await TryConnectServerAsync(server);
+        if (outcome == ConnectOutcome.Success)
+        {
+            _sessionConnectedUtc = DateTime.UtcNow;
+            SetStatus($"Туннель обновлён: {server.Name}.", important: false);
+        }
     }
 
     private async Task HandleSessionFailureAsync(string reason)
@@ -1978,6 +2011,7 @@ public partial class MainWindow : Window
             _connectedServer = server;
             _activeCore = ProxyCoreKind.SingBox;
             _healthFailStreak = 0;
+            _sessionConnectedUtc = DateTime.UtcNow;
             _settings.LastServerUri = server.RawUri;
             _settings.LastServerName = server.Name;
             ServerList.SelectedItem = server;
@@ -2080,6 +2114,7 @@ public partial class MainWindow : Window
             _connectedServer = server;
             _activeCore = ProxyCoreKind.Xray;
             _healthFailStreak = 0;
+            _sessionConnectedUtc = DateTime.UtcNow;
             _settings.LastServerUri = server.RawUri;
             _settings.LastServerName = server.Name;
             ServerList.SelectedItem = server;
@@ -2287,6 +2322,7 @@ public partial class MainWindow : Window
         {
             _sessionEpoch++;
             _healthFailStreak = 0;
+            _sessionConnectedUtc = default;
             _proxy.DisableIfOwned();
             await _runner.StopAsync();
             await _xray.StopAsync();

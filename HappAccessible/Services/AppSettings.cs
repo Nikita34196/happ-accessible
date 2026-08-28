@@ -50,6 +50,8 @@ public sealed class AppSettings
     public string DnsRemoteServer { get; set; } = "1.1.1.1";
     public string DnsRemoteFallback { get; set; } = "8.8.8.8";
     public bool RejectQuicUdp443 { get; set; } = true;
+    /// <summary>Proactively restart tunnel every N minutes (0 = off).</summary>
+    public int SessionRefreshMinutes { get; set; } = 90;
 
     /// <summary>Remnawave panel base URL for in-app admin (e.g. https://host.sslip.io).</summary>
     public string? RemnawavePanelUrl { get; set; }

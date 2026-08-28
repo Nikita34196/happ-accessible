@@ -43,6 +43,8 @@ public sealed class XrayRunner : IDisposable
     public int ActivePort => _activePort;
     public bool IsRunning => _process is { HasExited: false };
 
+    public event Action? CoreExited;
+
     public string RecentLog
     {
         get
@@ -195,6 +197,7 @@ public sealed class XrayRunner : IDisposable
         _process = new Process { StartInfo = psi, EnableRaisingEvents = true };
         _process.OutputDataReceived += (_, e) => AppendLog(e.Data);
         _process.ErrorDataReceived += (_, e) => AppendLog(e.Data);
+        _process.Exited += (_, _) => CoreExited?.Invoke();
 
         if (!_process.Start())
             throw new InvalidOperationException("Не удалось запустить Xray.");
@@ -207,6 +210,9 @@ public sealed class XrayRunner : IDisposable
         if (_process.HasExited)
             throw new InvalidOperationException($"Xray сразу завершился (код {_process.ExitCode}). {RecentLog}");
     }
+
+    public async Task<(bool Ok, string Detail)> ProbeSessionHealthAsync(CancellationToken ct = default) =>
+        await ConnectivityProbe.ProbeSessionHealthAsync(_activePort, ct).ConfigureAwait(false);
 
     public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default) =>
         await ConnectivityProbe.ProbeHttpViaProxyAsync(_activePort, ct).ConfigureAwait(false);

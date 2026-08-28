@@ -38,6 +38,22 @@ public static class ConnectivityProbe
         }
     }
 
+    public static async Task<bool> ProbeMixedPortAsync(int mixedPort, CancellationToken ct = default)
+    {
+        try
+        {
+            using var client = new TcpClient();
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(3));
+            await client.ConnectAsync(IPAddress.Loopback, mixedPort, linked.Token).ConfigureAwait(false);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     public static async Task WaitForProcessReadyAsync(
         Process process, TimeSpan maxWait, CancellationToken ct = default)
     {
@@ -47,7 +63,6 @@ public static class ConnectivityProbe
             ct.ThrowIfCancellationRequested();
             if (process.HasExited)
                 return;
-            // Still alive after ~350ms — treat as ready (fail-fast if it dies later)
             if (sw.ElapsedMilliseconds >= 350)
                 return;
             await Task.Delay(100, ct).ConfigureAwait(false);
@@ -69,12 +84,7 @@ public static class ConnectivityProbe
             "http://cp.cloudflare.com/"
         };
 
-        using var handler = new HttpClientHandler
-        {
-            Proxy = new WebProxy($"http://127.0.0.1:{mixedPort}"),
-            UseProxy = true,
-            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
-        };
+        using var handler = CreateProxyHandler(mixedPort);
         using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
 
         int? best = null;
@@ -103,4 +113,68 @@ public static class ConnectivityProbe
 
         return best;
     }
+
+    /// <summary>Full session probe: mixed port, HTTP, HTTPS site, DNS.</summary>
+    public static async Task<(bool Ok, string Detail)> ProbeSessionHealthAsync(
+        int mixedPort, CancellationToken ct = default)
+    {
+        if (!await ProbeMixedPortAsync(mixedPort, ct).ConfigureAwait(false))
+            return (false, "локальный mixed-порт не отвечает");
+
+        if (await ProbeHttpLatencyViaProxyAsync(mixedPort, ct).ConfigureAwait(false) is null)
+            return (false, "HTTP через туннель не отходит");
+
+        if (!await ProbeHttpsSiteViaProxyAsync(mixedPort, "https://example.com/", ct).ConfigureAwait(false))
+            return (false, "HTTPS через туннель не отходит");
+
+        if (!await ProbeDnsViaProxyAsync(mixedPort, ct).ConfigureAwait(false))
+            return (false, "DNS через туннель не отходит");
+
+        return (true, "ok");
+    }
+
+    private static async Task<bool> ProbeHttpsSiteViaProxyAsync(
+        int mixedPort, string url, CancellationToken ct)
+    {
+        try
+        {
+            using var handler = CreateProxyHandler(mixedPort);
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(8));
+            using var resp = await client.GetAsync(url, linked.Token).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode || (int)resp.StatusCode is 301 or 302;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> ProbeDnsViaProxyAsync(int mixedPort, CancellationToken ct)
+    {
+        try
+        {
+            using var handler = CreateProxyHandler(mixedPort);
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            linked.CancelAfter(TimeSpan.FromSeconds(6));
+            using var resp = await client.GetAsync(
+                "http://cloudflare-dns.com/dns-query?name=example.com&type=A",
+                linked.Token).ConfigureAwait(false);
+            return resp.IsSuccessStatusCode;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static HttpClientHandler CreateProxyHandler(int mixedPort) =>
+        new()
+        {
+            Proxy = new WebProxy($"http://127.0.0.1:{mixedPort}"),
+            UseProxy = true,
+            ServerCertificateCustomValidationCallback = (_, _, _, _) => true
+        };
 }

@@ -258,11 +258,7 @@ public static class SingBoxConfigBuilder
         if (routing.Mode is RoutingMode.AppProxy or RoutingMode.AppBypass)
             route["find_process"] = true;
 
-        var cachePath = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HappAccessible", "data", "cache.db");
-
-        RotateDnsCacheIfStale(TimeSpan.FromHours(12));
+        ClearDnsCache();
 
         var config = new Dictionary<string, object?>
         {
@@ -278,15 +274,7 @@ public static class SingBoxConfigBuilder
                 outbound,
                 new Dictionary<string, object?> { ["type"] = "direct", ["tag"] = "direct" }
             },
-            ["route"] = route,
-            ["experimental"] = new Dictionary<string, object?>
-            {
-                ["cache_file"] = new Dictionary<string, object?>
-                {
-                    ["enabled"] = true,
-                    ["path"] = cachePath
-                }
-            }
+            ["route"] = route
         };
 
         return JsonSerializer.Serialize(config, new JsonSerializerOptions { WriteIndented = true });
@@ -799,16 +787,14 @@ public static class SingBoxConfigBuilder
         return outbound;
     }
 
-    public static void RotateDnsCacheIfStale(TimeSpan maxAge)
+    public static void ClearDnsCache()
     {
         try
         {
             var cachePath = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "HappAccessible", "data", "cache.db");
-            if (!File.Exists(cachePath))
-                return;
-            if (DateTime.UtcNow - File.GetLastWriteTimeUtc(cachePath) > maxAge)
+            if (File.Exists(cachePath))
                 File.Delete(cachePath);
         }
         catch

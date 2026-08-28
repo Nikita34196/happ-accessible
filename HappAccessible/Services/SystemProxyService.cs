@@ -109,6 +109,34 @@ public sealed class SystemProxyService
         NotifyChanged();
     }
 
+    public void RefreshIfOwned()
+    {
+        if (!_weEnabled || string.IsNullOrEmpty(_ourServer))
+            return;
+
+        try
+        {
+            using var key = Registry.CurrentUser.OpenSubKey(KeyPath, writable: true);
+            if (key is null)
+                return;
+
+            var enabled = key.GetValue("ProxyEnable") as int? ?? 0;
+            var server = key.GetValue("ProxyServer") as string ?? "";
+            if (enabled != 1 || !string.Equals(server, _ourServer, StringComparison.OrdinalIgnoreCase))
+            {
+                key.SetValue("ProxyEnable", 1, RegistryValueKind.DWord);
+                key.SetValue("ProxyServer", _ourServer, RegistryValueKind.String);
+                key.SetValue("ProxyOverride", "localhost;127.*;10.*;192.168.*;<local>", RegistryValueKind.String);
+            }
+
+            NotifyChanged();
+        }
+        catch
+        {
+            // ignore
+        }
+    }
+
     private static void RestorePrevious(
         RegistryKey key,
         int? prevEnable,

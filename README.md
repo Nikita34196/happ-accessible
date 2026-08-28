@@ -2,13 +2,14 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.15)
+## Возможности (0.3.16)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**
 - **AmneziaWG / WireGuard** — импорт `.conf`
 - **Dual-core:** [sing-box-lx](https://github.com/Leadaxe/sing-box-lx) (TUN, маршруты, **xhttp**, hy2/WG) и Xray (Reality/Vision в режиме Авто)
 - Одна кнопка **Подключить / Отключить**, пинг и **диагностика** выбранного сервера (TCP, туннель, DNS)
-- Автовосстановление сессии: watchdog ядра, проверка туннеля, переподключение после сна/смены сети
+- Автовосстановление сессии: полная проверка (mixed-порт, HTTP, HTTPS, DNS), профилактический перезапуск туннеля каждые 90 мин, реакция на падение ядра
+- **Тихое обновление приложения** — без окна установщика; portable обновляется на месте
 - Безопасный системный прокси: маркер сессии, восстановление прежних настроек после сбоя
 - Сохранение последнего рабочего списка серверов при ошибке подписки
 - Один экземпляр приложения (повторный запуск активирует окно)
@@ -51,11 +52,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.15` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.16` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.15
-git push origin v0.3.15
+git tag v0.3.16
+git push origin v0.3.16
 ```
 
 ## Клавиши

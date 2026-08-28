@@ -16,7 +16,7 @@ public sealed record AppReleaseInfo(
     bool UpdateAvailable);
 
 /// <summary>
-/// Checks GitHub Releases for Happ Accessible and applies portable updates.
+/// Checks GitHub Releases for Happ Accessible and applies updates silently or in-place.
 /// </summary>
 public sealed class AppUpdateService
 {
@@ -108,9 +108,29 @@ public sealed class AppUpdateService
         }
     }
 
+    public static bool CanSelfUpdateInPlace()
+    {
+        try
+        {
+            var dir = Path.GetFullPath(AppContext.BaseDirectory.TrimEnd('\\', '/'));
+            var probe = Path.Combine(dir, $".ha-write-{Environment.ProcessId}");
+            File.WriteAllText(probe, "ok");
+            File.Delete(probe);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static string UpdatesRoot =>
+        Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HappAccessible", "updates");
+
     /// <summary>
-    /// Downloads the update and prepares a script that replaces files after the app exits.
-    /// Returns path to the updater script (caller should exit the app after starting it).
+    /// Downloads portable zip and prepares a script that replaces files after the app exits.
     /// </summary>
     public async Task<string> PreparePortableUpdateAsync(
         AppReleaseInfo info,
@@ -120,9 +140,7 @@ public sealed class AppUpdateService
         if (string.IsNullOrEmpty(info.PortableZipUrl))
             throw new InvalidOperationException("В релизе нет portable zip.");
 
-        var updateRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HappAccessible", "updates");
+        var updateRoot = UpdatesRoot;
         Directory.CreateDirectory(updateRoot);
         var zipPath = Path.Combine(updateRoot, $"HappAccessible-{info.LatestVersion}.zip");
         var extractDir = Path.Combine(updateRoot, "extract-" + info.LatestVersion);
@@ -140,7 +158,6 @@ public sealed class AppUpdateService
         progress?.Report("Распаковываю обновление…");
         ZipFile.ExtractToDirectory(zipPath, extractDir, overwriteFiles: true);
 
-        // If zip has a single top-level folder, use it
         var children = Directory.GetDirectories(extractDir);
         var files = Directory.GetFiles(extractDir);
         var payload = extractDir;
@@ -161,22 +178,15 @@ public sealed class AppUpdateService
             $"set TARGET={QuoteCmd(targetDir)}",
             $"set SOURCE={QuoteCmd(payload)}",
             $"set PID={pid}",
-            "echo Waiting for Happ Accessible to exit...",
             ":wait",
-            "tasklist /FI \"PID eq %PID%\" | find \"%PID%\" >nul",
+            "tasklist /FI \"PID eq %PID%\" 2>nul | find \"%PID%\" >nul",
             "if not errorlevel 1 (",
             "  timeout /t 1 /nobreak >nul",
             "  goto wait",
             ")",
             "timeout /t 1 /nobreak >nul",
-            "echo Copying files...",
             "xcopy \"%SOURCE%\\*\" \"%TARGET%\\\" /E /Y /Q /I >nul",
-            "if errorlevel 1 (",
-            "  echo Update failed.",
-            "  pause",
-            "  exit /b 1",
-            ")",
-            "echo Starting Happ Accessible...",
+            "if errorlevel 1 exit /b 1",
             "start \"\" \"%TARGET%\\HappAccessible.exe\"",
             "exit /b 0"
         };
@@ -193,11 +203,8 @@ public sealed class AppUpdateService
         if (string.IsNullOrEmpty(info.SetupExeUrl))
             throw new InvalidOperationException("В релизе нет Setup.exe.");
 
-        var updateRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "HappAccessible", "updates");
-        Directory.CreateDirectory(updateRoot);
-        var setupPath = Path.Combine(updateRoot, $"HappAccessible-Setup-{info.LatestVersion}.exe");
+        Directory.CreateDirectory(UpdatesRoot);
+        var setupPath = Path.Combine(UpdatesRoot, $"HappAccessible-Setup-{info.LatestVersion}.exe");
         progress?.Report($"Скачиваю установщик {info.LatestVersion}…");
         await using (var fs = File.Create(setupPath))
         {
@@ -214,16 +221,20 @@ public sealed class AppUpdateService
         {
             FileName = scriptPath,
             UseShellExecute = true,
-            WorkingDirectory = Path.GetDirectoryName(scriptPath)!
+            WorkingDirectory = Path.GetDirectoryName(scriptPath)!,
+            WindowStyle = ProcessWindowStyle.Hidden
         });
     }
 
-    public static void LaunchSetup(string setupPath)
+    /// <summary>Silent Inno Setup upgrade in place.</summary>
+    public static void LaunchSetupSilent(string setupPath)
     {
         Process.Start(new ProcessStartInfo
         {
             FileName = setupPath,
-            UseShellExecute = true
+            Arguments = "/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /NORESTART",
+            UseShellExecute = true,
+            WindowStyle = ProcessWindowStyle.Hidden
         });
     }
 

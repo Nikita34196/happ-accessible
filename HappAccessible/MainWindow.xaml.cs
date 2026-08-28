@@ -40,6 +40,7 @@ public partial class MainWindow : Window
     private bool _remnawaveAdminUnlockedThisSession;
     private NetworkChangeMonitor? _networkMonitor;
     private bool _networkRecoveryBusy;
+    private bool _sessionRecoveryBusy;
     private DateTime _sessionConnectedUtc;
     private bool _showFavoritesOnly;
     private bool _manualDisconnect;
@@ -505,7 +506,7 @@ public partial class MainWindow : Window
     {
         Dispatcher.InvokeAsync(async () =>
         {
-            if (_connectBusy || _failoverBusy || !IsVpnConnected || _awgConnected)
+            if (_connectBusy || _failoverBusy || _sessionRecoveryBusy || !IsVpnConnected || _awgConnected)
                 return;
             await HandleSessionFailureAsync("ядро прокси неожиданно завершилось");
         });
@@ -611,31 +612,39 @@ public partial class MainWindow : Window
 
     private async Task HandleSessionFailureAsync(string reason)
     {
-        if (_connectBusy || _failoverBusy || _connectedServer is null)
+        if (_connectBusy || _failoverBusy || _sessionRecoveryBusy || _connectedServer is null)
             return;
 
-        var failed = _connectedServer;
-        var failedUri = failed.RawUri;
-        SessionJournalService.Record($"Сбой сессии: {reason} ({failed.Name}).");
-
-        if (_settings.AutoWhitelistFailover && failed.Protocol != "amneziawg")
+        _sessionRecoveryBusy = true;
+        try
         {
-            SetStatus($"Проверка связи: {reason} ({failed.Name}). Ищу сервер обхода белых списков…");
-            await FailoverToWhitelistAsync(excludeUri: failedUri);
-            return;
+            var failed = _connectedServer;
+            var failedUri = failed.RawUri;
+            SessionJournalService.Record($"Сбой сессии: {reason} ({failed.Name}).");
+
+            if (_settings.AutoWhitelistFailover && failed.Protocol != "amneziawg")
+            {
+                SetStatus($"Проверка связи: {reason} ({failed.Name}). Ищу сервер обхода белых списков…");
+                await FailoverToWhitelistAsync(excludeUri: failedUri);
+                return;
+            }
+
+            SetStatus($"Проверка связи: {reason} ({failed.Name}). Переподключаюсь…");
+            _tray?.Notify($"Переподключение: {failed.Name}");
+
+            await DisconnectAsync(manual: false);
+
+            var server = _servers.FirstOrDefault(s => s.RawUri == failedUri);
+            if (server is null)
+                return;
+
+            ServerList.SelectedItem = server;
+            await ConnectAsync(allowFailover: false, server);
         }
-
-        SetStatus($"Проверка связи: {reason} ({failed.Name}). Переподключаюсь…");
-        _tray?.Notify($"Переподключение: {failed.Name}");
-
-        await DisconnectAsync(manual: false);
-
-        var server = _servers.FirstOrDefault(s => s.RawUri == failedUri);
-        if (server is null)
-            return;
-
-        ServerList.SelectedItem = server;
-        await ConnectAsync(allowFailover: false, server);
+        finally
+        {
+            _sessionRecoveryBusy = false;
+        }
     }
 
     private static async Task<bool> ProbeDirectAsync()
@@ -2325,7 +2334,10 @@ public partial class MainWindow : Window
             await _runner.StopAsync();
             await _xray.StopAsync();
             if (_awgConnected || _awg.IsTunnelRunning)
-                await _awg.DisconnectAsync();
+            {
+                try { await _awg.DisconnectAsync(); }
+                catch (Exception ex) { AppLogService.Warn("AWG disconnect: " + ex.Message); }
+            }
             _awgConnected = false;
             _connectedServer = null;
             _activeCore = ProxyCoreKind.SingBox;
@@ -2337,7 +2349,10 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
+            AppLogService.Error("Ошибка отключения", ex);
             SetStatus("Ошибка отключения: " + ex.Message);
+            _connectedServer = null;
+            _awgConnected = false;
             UpdateConnectToggleUi();
         }
     }

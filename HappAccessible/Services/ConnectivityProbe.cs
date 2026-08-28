@@ -127,8 +127,10 @@ public static class ConnectivityProbe
         if (!await ProbeHttpsSiteViaProxyAsync(mixedPort, "https://example.com/", ct).ConfigureAwait(false))
             return (false, "HTTPS через туннель не отходит");
 
+        // HTTP/HTTPS already prove routing works; DNS-over-HTTPS probe is best-effort only
+        // (Cloudflare DoH often fails via HTTP proxy without Accept header — caused false reconnects).
         if (!await ProbeDnsViaProxyAsync(mixedPort, ct).ConfigureAwait(false))
-            return (false, "DNS через туннель не отходит");
+            return (true, "ok (DNS probe inconclusive)");
 
         return (true, "ok");
     }
@@ -153,21 +155,33 @@ public static class ConnectivityProbe
 
     private static async Task<bool> ProbeDnsViaProxyAsync(int mixedPort, CancellationToken ct)
     {
-        try
+        var urls = new[]
         {
-            using var handler = CreateProxyHandler(mixedPort);
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            linked.CancelAfter(TimeSpan.FromSeconds(6));
-            using var resp = await client.GetAsync(
-                "http://cloudflare-dns.com/dns-query?name=example.com&type=A",
-                linked.Token).ConfigureAwait(false);
-            return resp.IsSuccessStatusCode;
-        }
-        catch
+            "https://cloudflare-dns.com/dns-query?name=example.com&type=A",
+            "http://cloudflare-dns.com/dns-query?name=example.com&type=A"
+        };
+
+        foreach (var url in urls)
         {
-            return false;
+            try
+            {
+                using var handler = CreateProxyHandler(mixedPort);
+                using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
+                using var request = new HttpRequestMessage(HttpMethod.Get, url);
+                request.Headers.TryAddWithoutValidation("Accept", "application/dns-json");
+                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                linked.CancelAfter(TimeSpan.FromSeconds(6));
+                using var resp = await client.SendAsync(request, linked.Token).ConfigureAwait(false);
+                if (resp.IsSuccessStatusCode)
+                    return true;
+            }
+            catch
+            {
+                // try next
+            }
         }
+
+        return false;
     }
 
     private static HttpClientHandler CreateProxyHandler(int mixedPort) =>

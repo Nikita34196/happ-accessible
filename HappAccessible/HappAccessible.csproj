@@ -10,11 +10,12 @@
     <ApplicationTitle>Happ Accessible</ApplicationTitle>
     <Product>Happ Accessible</Product>
     <Description>Accessible VPN and proxy client for NVDA (subscriptions, AmneziaWG, System Proxy / TUN)</Description>
-    <Version>0.3.20</Version>
+    <Version>0.3.21</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="8.0.1" />
+    <EmbeddedResource Include="..\CHANGELOG.md" Link="CHANGELOG.md" />
   </ItemGroup>
 
 </Project>

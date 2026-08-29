@@ -49,6 +49,7 @@ public sealed class AppSettings
     public string DnsStrategy { get; set; } = "ipv4_only";
     public string DnsRemoteServer { get; set; } = "1.1.1.1";
     public string DnsRemoteFallback { get; set; } = "8.8.8.8";
+    /// <summary>Enable the QUIC workaround for xhttp/splithttp links.</summary>
     public bool RejectQuicUdp443 { get; set; } = true;
     /// <summary>Proactively restart tunnel every N minutes (0 = off).</summary>
     public int SessionRefreshMinutes { get; set; } = 90;

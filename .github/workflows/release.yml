@@ -88,12 +88,27 @@ jobs:
           if (-not (Test-Path $setup)) { throw "Missing $setup" }
           Get-ChildItem dist | Format-Table Name, Length -AutoSize
 
+      - name: Prepare release notes
+        shell: pwsh
+        run: |
+          $v = "${{ steps.ver.outputs.version }}"
+          $changelog = Get-Content CHANGELOG.md -Raw
+          $pattern = "(?ms)^##\s+$([regex]::Escape($v))\s*\r?\n(?<body>.*?)(?=^##\s+|\z)"
+          $match = [regex]::Match($changelog, $pattern)
+          if ($match.Success) {
+            $notes = $match.Groups["body"].Value.Trim()
+          } else {
+            $notes = "Изменения версии $v опубликованы в истории коммитов GitHub."
+          }
+          Set-Content -Path dist/release-notes.md -Value $notes -NoNewline -Encoding utf8
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.ver.outputs.tag }}
           name: Happ Accessible ${{ steps.ver.outputs.version }}
-          generate_release_notes: true
+          body_path: dist/release-notes.md
+          generate_release_notes: false
           files: |
             dist/HappAccessible-Portable-${{ steps.ver.outputs.version }}.zip
             dist/HappAccessible-Setup-${{ steps.ver.outputs.version }}.exe

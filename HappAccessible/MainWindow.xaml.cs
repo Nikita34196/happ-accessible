@@ -283,6 +283,62 @@ public partial class MainWindow : Window
         }
     }
 
+    private async void MenuWhatIsNew_OnClick(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            SetStatus("Загружаю список изменений версии…", important: false);
+            AppReleaseInfo info;
+            try
+            {
+                info = await _appUpdates.CheckAsync();
+            }
+            catch
+            {
+                var localNotes = AppUpdateService.GetLocalChangeLog();
+                ShowChangeLog(AppUpdateService.GetCurrentVersion(), localNotes, offline: true);
+                return;
+            }
+
+            var version = info.UpdateAvailable ? info.LatestVersion : info.CurrentVersion;
+            var notes = string.IsNullOrWhiteSpace(info.ReleaseNotes)
+                ? AppUpdateService.GetLocalChangeLog()
+                : info.ReleaseNotes.Trim();
+
+            if (notes.Length > 12000)
+                notes = notes[..12000] + "\n\n…";
+
+            if (string.IsNullOrWhiteSpace(notes))
+                notes = $"Для версии {version} подробный список изменений пока не опубликован.\n\n" +
+                        $"Открыть страницу релиза: {info.ReleaseUrl}";
+
+            ShowChangeLog(version, notes, offline: false);
+            SetStatus($"Список изменений версии {version} показан.", important: false);
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Не удалось загрузить список изменений: " + ex.Message);
+        }
+    }
+
+    private void ShowChangeLog(string version, string notes, bool offline)
+    {
+        if (notes.Length > 12000)
+            notes = notes[..12000] + "\n\n…";
+
+        System.Windows.MessageBox.Show(
+            this,
+            $"Happ Accessible {version}\n\n{notes}",
+            offline ? "Что нового (локальная копия)" : "Что нового",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+        SetStatus(
+            offline
+                ? "Показан локальный список изменений."
+                : $"Список изменений версии {version} показан.",
+            important: false);
+    }
+
     private async Task ApplyAppUpdateAsync(AppReleaseInfo info, bool silent)
     {
         if (!silent)
@@ -1478,7 +1534,11 @@ public partial class MainWindow : Window
         foreach (var s in _servers)
             s.LatencyMs = -1;
         RefreshServerList();
-        SetStatus($"Пинг {_servers.Count} серверов…");
+        var uniqueEndpoints = _servers
+            .Select(s => $"{s.Host}|{s.Port}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        SetStatus($"Пинг {_servers.Count} серверов ({uniqueEndpoints} уникальных endpoint)…");
 
         try
         {
@@ -1497,6 +1557,7 @@ public partial class MainWindow : Window
             {
                 SetStatus(
                     $"Пинг готов: отвечают {ok} из {_servers.Count} (прямой TCP). " +
+                    $"Проверено уникальных endpoint: {uniqueEndpoints}. " +
                     $"Лучший: {best.Name}, TCP {best.LatencyMs} мс.");
                 if (ServerList.SelectedItem is null)
                     ServerList.SelectedItem = best;

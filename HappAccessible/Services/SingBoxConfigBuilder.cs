@@ -59,7 +59,10 @@ public static class SingBoxConfigBuilder
             // QUIC (UDP/443) через VLESS+xhttp часто зависает — Google/YouTube в Chrome
             // не открываются, пока браузер не упадёт на TCP HTTPS. Telegram на TCP ок.
         };
-        if (engine.RejectQuicUdp443)
+        // TCP Reality/Vision supports UDP via xudp; rejecting QUIC there adds
+        // a fallback delay to every HTTP/3-capable browser. Keep the reject
+        // workaround only for xhttp/splithttp, where UDP is known to stall.
+        if (engine.RejectQuicUdp443 && UsesUnreliableQuicTransport(server))
         {
             rules.Add(new Dictionary<string, object?>
             {
@@ -225,14 +228,24 @@ public static class SingBoxConfigBuilder
                     ["type"] = "https",
                     ["tag"] = "dns-remote",
                     ["server"] = dnsRemote,
-                    ["detour"] = "proxy"
+                    ["detour"] = "proxy",
+                    ["tls"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["server_name"] = DnsTlsServerName(dnsRemote, "cloudflare-dns.com")
+                    }
                 },
                 new Dictionary<string, object?>
                 {
                     ["type"] = "https",
                     ["tag"] = "dns-remote-fallback",
                     ["server"] = dnsFallback,
-                    ["detour"] = "proxy"
+                    ["detour"] = "proxy",
+                    ["tls"] = new Dictionary<string, object?>
+                    {
+                        ["enabled"] = true,
+                        ["server_name"] = DnsTlsServerName(dnsFallback, "dns.google")
+                    }
                 },
                 new Dictionary<string, object?>
                 {
@@ -552,6 +565,30 @@ public static class SingBoxConfigBuilder
     private static bool IPAddressLooksLiteral(string host) =>
         System.Net.IPAddress.TryParse(host, out _);
 
+    private static bool UsesUnreliableQuicTransport(ServerProfile server)
+    {
+        if (server.Protocol is not ("vless" or "trojan" or "vmess"))
+            return false;
+
+        try
+        {
+            var queryStart = server.RawUri.IndexOf('?');
+            if (queryStart < 0)
+                return false;
+            var queryEnd = server.RawUri.IndexOf('#', queryStart);
+            var query = queryEnd >= 0
+                ? server.RawUri[queryStart..queryEnd]
+                : server.RawUri[queryStart..];
+            var type = Q(ParseQuery(query), "type");
+            return string.Equals(type, "xhttp", StringComparison.OrdinalIgnoreCase)
+                   || string.Equals(type, "splithttp", StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static Dictionary<string, object?> BuildTrojan(string uri)
     {
         var u = new Uri(uri);
@@ -844,6 +881,15 @@ public static class SingBoxConfigBuilder
         host = (host ?? "").Trim();
         return host.Length > 0 ? host : fallback;
     }
+
+    private static string DnsTlsServerName(string host, string fallback) =>
+        host switch
+        {
+            "1.1.1.1" or "1.0.0.1" => "cloudflare-dns.com",
+            "8.8.8.8" or "8.8.4.4" => "dns.google",
+            _ when IPAddressLooksLiteral(host) => fallback,
+            _ => host
+        };
 
     private static string NormalizeDnsStrategy(string? strategy) =>
         (strategy ?? "").Trim().ToLowerInvariant() switch

@@ -13,7 +13,7 @@ public sealed class EngineOptions
     public string DnsStrategy { get; init; } = "ipv4_only";
     public string DnsRemoteServer { get; init; } = "1.1.1.1";
     public string DnsRemoteFallback { get; init; } = "8.8.8.8";
-    /// <summary>Reject QUIC/UDP443 — helps xhttp/VLESS in Chrome.</summary>
+    /// <summary>Reject QUIC/UDP443 for xhttp/splithttp transports that stall on UDP.</summary>
     public bool RejectQuicUdp443 { get; init; } = true;
 
     public static int ClampPort(int port) =>

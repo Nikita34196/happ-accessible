@@ -13,7 +13,8 @@ public sealed record AppReleaseInfo(
     string? PortableZipUrl,
     string? SetupExeUrl,
     string ReleaseUrl,
-    bool UpdateAvailable);
+    bool UpdateAvailable,
+    string ReleaseNotes);
 
 /// <summary>
 /// Checks GitHub Releases for Happ Accessible and applies updates silently or in-place.
@@ -46,6 +47,19 @@ public sealed class AppUpdateService
         return $"{v.Major}.{v.Minor}.{v.Build}";
     }
 
+    public static string GetLocalChangeLog()
+    {
+        var assembly = Assembly.GetExecutingAssembly();
+        var resource = assembly.GetManifestResourceNames()
+            .FirstOrDefault(name => name.EndsWith("CHANGELOG.md", StringComparison.OrdinalIgnoreCase));
+        if (resource is null)
+            return "";
+
+        using var stream = assembly.GetManifestResourceStream(resource);
+        using var reader = stream is null ? null : new StreamReader(stream);
+        return reader?.ReadToEnd() ?? "";
+    }
+
     public async Task<AppReleaseInfo> CheckAsync(CancellationToken ct = default)
     {
         var current = GetCurrentVersion();
@@ -55,7 +69,7 @@ public sealed class AppUpdateService
         if (resp.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             return new AppReleaseInfo(current, current, null, null,
-                $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases", false);
+                $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases", false, "");
         }
 
         resp.EnsureSuccessStatusCode();
@@ -67,6 +81,9 @@ public sealed class AppUpdateService
         var htmlUrl = root.TryGetProperty("html_url", out var hu)
             ? hu.GetString() ?? $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases"
             : $"https://github.com/{GitHubOwner}/{GitHubRepo}/releases";
+        var releaseNotes = root.TryGetProperty("body", out var body)
+            ? body.GetString() ?? ""
+            : "";
 
         string? zip = null;
         string? setup = null;
@@ -89,7 +106,7 @@ public sealed class AppUpdateService
 
         var available = CoreUpdateService.IsNewer(latest, current)
                         && (!string.IsNullOrEmpty(zip) || !string.IsNullOrEmpty(setup));
-        return new AppReleaseInfo(current, latest, zip, setup, htmlUrl, available);
+        return new AppReleaseInfo(current, latest, zip, setup, htmlUrl, available, releaseNotes);
     }
 
     public static bool IsRunningFromInstallDir()

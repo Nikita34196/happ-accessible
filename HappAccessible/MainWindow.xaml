@@ -34,6 +34,8 @@
                           AutomationProperties.Name="Проверить обновления ядер" />
                 <MenuItem Header="Проверить обновление _приложения" Click="MenuCheckAppUpdate_OnClick"
                           AutomationProperties.Name="Проверить обновление приложения через GitHub" />
+                <MenuItem Header="Что _нового в версии" Click="MenuWhatIsNew_OnClick"
+                          AutomationProperties.Name="Показать список изменений текущей версии" />
                 <MenuItem Header="_Диагностика сервера" Click="DiagnosticsButton_OnClick"
                           InputGestureText="Alt+D"
                           AutomationProperties.Name="Диагностика выбранного сервера" />

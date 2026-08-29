@@ -39,15 +39,22 @@ public static class PingService
     {
         // Limited parallelism so we don't flood
         var list = servers.ToList();
+        var groups = list
+            .GroupBy(s => $"{s.Host}|{s.Port}", StringComparer.OrdinalIgnoreCase)
+            .ToList();
         using var gate = new SemaphoreSlim(8);
-        var tasks = list.Select(async s =>
+        var tasks = groups.Select(async group =>
         {
             await gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
-                var ms = await PingAsync(s, ct).ConfigureAwait(false);
-                s.LatencyMs = ms;
-                progress?.Report((s, ms));
+                var representative = group.First();
+                var ms = await PingAsync(representative, ct).ConfigureAwait(false);
+                foreach (var server in group)
+                {
+                    server.LatencyMs = ms;
+                    progress?.Report((server, ms));
+                }
             }
             finally
             {

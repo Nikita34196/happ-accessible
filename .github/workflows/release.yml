@@ -86,6 +86,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed" }
           $setup = "dist/HappAccessible-Setup-$v.exe"
           if (-not (Test-Path $setup)) { throw "Missing $setup" }
+          Get-ChildItem dist | Format-Table Name, Length -AutoSize
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

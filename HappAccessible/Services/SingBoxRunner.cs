@@ -283,6 +283,7 @@ public sealed class SingBoxRunner : IDisposable
         {
             _process.Dispose();
             _process = null;
+            try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { /* best effort */ }
         }
     }
 

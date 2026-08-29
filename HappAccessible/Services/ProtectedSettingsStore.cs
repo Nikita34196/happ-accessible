@@ -34,11 +34,14 @@ public sealed class ProtectedSettingsStore
             if (payload is null)
                 return;
 
-            if (!string.IsNullOrWhiteSpace(payload.SubscriptionInput))
+            if (string.IsNullOrWhiteSpace(settings.SubscriptionInput)
+                && !string.IsNullOrWhiteSpace(payload.SubscriptionInput))
                 settings.SubscriptionInput = payload.SubscriptionInput;
-            if (!string.IsNullOrWhiteSpace(payload.RemnawaveApiToken))
+            if (string.IsNullOrWhiteSpace(settings.RemnawaveApiToken)
+                && !string.IsNullOrWhiteSpace(payload.RemnawaveApiToken))
                 settings.RemnawaveApiToken = payload.RemnawaveApiToken;
-            if (!string.IsNullOrWhiteSpace(payload.RemnawavePanelUrl))
+            if (string.IsNullOrWhiteSpace(settings.RemnawavePanelUrl)
+                && !string.IsNullOrWhiteSpace(payload.RemnawavePanelUrl))
                 settings.RemnawavePanelUrl = payload.RemnawavePanelUrl;
         }
         catch
@@ -47,7 +50,7 @@ public sealed class ProtectedSettingsStore
         }
     }
 
-    public static void SaveFrom(AppSettings settings)
+    public static bool SaveFrom(AppSettings settings)
     {
         try
         {
@@ -64,10 +67,12 @@ public sealed class ProtectedSettingsStore
             var tmp = StorePath + ".tmp";
             File.WriteAllBytes(tmp, protectedBytes);
             File.Move(tmp, StorePath, overwrite: true);
+            return true;
         }
-        catch
+        catch (Exception ex)
         {
-            // ignore
+            AppLogService.Error("Не удалось сохранить защищённые настройки", ex);
+            return false;
         }
     }
 }

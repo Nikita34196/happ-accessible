@@ -61,6 +61,19 @@ public static class AmneziaWgConfigStore
 
     public static string PidFilePath => Path.Combine(RuntimeDir, "tunnel.pid");
 
+    public static void RemoveActiveConfig()
+    {
+        try
+        {
+            if (File.Exists(ActiveConfigPath))
+                File.Delete(ActiveConfigPath);
+        }
+        catch
+        {
+            // The elevated service may still be releasing the file.
+        }
+    }
+
     public static bool LooksLikeConf(string text)
     {
         if (string.IsNullOrWhiteSpace(text))

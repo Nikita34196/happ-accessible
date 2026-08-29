@@ -13,12 +13,18 @@ $iss = Join-Path $root "installer\HappAccessible.iss"
 $dist = Join-Path $root "dist"
 $downloads = Join-Path $env:USERPROFILE "Downloads"
 
-# Read version from .iss
-$issText = Get-Content $iss -Raw
-if ($issText -notmatch '#define MyAppVersion "([^"]+)"') {
-    throw "Could not parse MyAppVersion from installer script."
+# Read the canonical version from the project and synchronize Inno Setup.
+$csprojText = Get-Content $proj -Raw
+if ($csprojText -notmatch '<Version>([^<]+)</Version>') {
+    throw "Could not parse Version from project file."
 }
-$version = $Matches[1]
+$version = $Matches[1].Trim()
+$issText = Get-Content $iss -Raw
+$issText = [regex]::Replace(
+    $issText,
+    '#define MyAppVersion "[^"]+"',
+    "#define MyAppVersion `"$version`"")
+Set-Content -Path $iss -Value $issText -Encoding UTF8
 
 Write-Host "==> Publishing self-contained win-x64…"
 if (Test-Path $publishDir) { Remove-Item $publishDir -Recurse -Force }

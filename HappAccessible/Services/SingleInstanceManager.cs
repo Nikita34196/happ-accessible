@@ -13,10 +13,19 @@ public sealed class SingleInstanceManager : IDisposable
     private CancellationTokenSource? _listenCts;
     private Task? _listenTask;
 
-    public SingleInstanceManager()
+    public SingleInstanceManager(bool waitForPreviousInstance = false)
     {
-        _ownsMutex = false;
-        _mutex = new Mutex(initiallyOwned: true, MutexName, out _ownsMutex);
+        _mutex = new Mutex(initiallyOwned: false, MutexName);
+        try
+        {
+            _ownsMutex = waitForPreviousInstance
+                ? _mutex.WaitOne(TimeSpan.FromSeconds(8))
+                : _mutex.WaitOne(0);
+        }
+        catch (AbandonedMutexException)
+        {
+            _ownsMutex = true;
+        }
     }
 
     public bool IsFirstInstance => _ownsMutex;

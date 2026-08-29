@@ -126,14 +126,17 @@ public sealed class AppSettings
     {
         lock (SaveLock)
         {
-            ProtectedSettingsStore.SaveFrom(this);
+            var protectedOk = ProtectedSettingsStore.SaveFrom(this);
 
             var sub = SubscriptionInput;
             var token = RemnawaveApiToken;
             var panel = RemnawavePanelUrl;
-            SubscriptionInput = "";
-            RemnawaveApiToken = null;
-            RemnawavePanelUrl = null;
+            if (protectedOk)
+            {
+                SubscriptionInput = "";
+                RemnawaveApiToken = null;
+                RemnawavePanelUrl = null;
+            }
 
             try
             {

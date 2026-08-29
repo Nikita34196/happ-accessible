@@ -224,6 +224,21 @@ public static class XrayConfigBuilder
                 ["allowInsecure"] = false
             }
         };
+        if (type == "ws")
+        {
+            stream["wsSettings"] = new Dictionary<string, object?>
+            {
+                ["path"] = Q(q, "path") ?? "/",
+                ["headers"] = new Dictionary<string, object?> { ["Host"] = sni }
+            };
+        }
+        else if (type == "grpc")
+        {
+            stream["grpcSettings"] = new Dictionary<string, object?>
+            {
+                ["serviceName"] = Q(q, "serviceName") ?? Q(q, "service") ?? ""
+            };
+        }
 
         return new Dictionary<string, object?>
         {
@@ -325,9 +340,7 @@ public static class XrayConfigBuilder
             var colon = user.IndexOf(':');
             method = colon > 0 ? user[..colon] : "aes-256-gcm";
             password = colon > 0 ? user[(colon + 1)..] : user;
-            var hostPort = hp.Split(':');
-            host = hostPort[0];
-            port = hostPort.Length > 1 && int.TryParse(hostPort[1], out var p) ? p : 443;
+            (host, port) = SplitHostPort(hp, 443);
         }
         else
         {
@@ -364,5 +377,26 @@ public static class XrayConfigBuilder
                 }
             }
         };
+    }
+
+    private static (string Host, int Port) SplitHostPort(string value, int fallbackPort)
+    {
+        value = value.Trim();
+        if (value.StartsWith('['))
+        {
+            var end = value.IndexOf(']');
+            if (end <= 1)
+                throw new FormatException("Некорректный IPv6 host.");
+            var port = end + 1 < value.Length && value[end + 1] == ':'
+                && int.TryParse(value[(end + 2)..], out var parsed)
+                ? parsed
+                : fallbackPort;
+            return (value[1..end], port);
+        }
+
+        var colon = value.LastIndexOf(':');
+        if (colon > 0 && int.TryParse(value[(colon + 1)..], out var p))
+            return (value[..colon], p);
+        return (value, fallbackPort);
     }
 }

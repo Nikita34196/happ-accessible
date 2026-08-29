@@ -100,9 +100,26 @@ public sealed class SystemProxyService
 
         using var key = Registry.CurrentUser.OpenSubKey(KeyPath, writable: true);
         if (key is null)
+        {
+            _weEnabled = false;
+            _ourServer = null;
+            ProxySessionStore.Clear();
             return;
+        }
 
-        RestorePrevious(key, _prevEnable, _prevServer, _prevOverride, _hadOverride);
+        var enabled = key.GetValue("ProxyEnable") as int? ?? 0;
+        var server = key.GetValue("ProxyServer") as string ?? "";
+        if (enabled == 1
+            && string.Equals(server, _ourServer, StringComparison.OrdinalIgnoreCase))
+        {
+            RestorePrevious(key, _prevEnable, _prevServer, _prevOverride, _hadOverride);
+        }
+        else
+        {
+            // The user or another application changed the proxy after we
+            // enabled it. Do not overwrite that newer state.
+            AppLogService.Warn("Системный прокси изменён извне — прежнее состояние не восстанавливаю.");
+        }
 
         _weEnabled = false;
         _ourServer = null;

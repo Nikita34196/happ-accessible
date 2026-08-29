@@ -81,7 +81,11 @@ public sealed class KillSwitchService
             RedirectStandardError = true
         };
         using var p = Process.Start(psi) ?? throw new InvalidOperationException("netsh не запустился.");
-        p.WaitForExit(5000);
+        if (!p.WaitForExit(5000))
+        {
+            try { p.Kill(); } catch { /* ignore */ }
+            throw new TimeoutException("netsh не завершился за 5 секунд.");
+        }
         if (p.ExitCode != 0)
         {
             var err = p.StandardError.ReadToEnd();

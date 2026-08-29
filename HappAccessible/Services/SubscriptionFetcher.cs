@@ -185,7 +185,11 @@ public sealed class SubscriptionFetcher
         {
             Directory.CreateDirectory(CacheDir);
             var path = CachePath(url);
-            File.WriteAllText(path, body, Encoding.UTF8);
+            var protectedBody = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(body),
+                null,
+                DataProtectionScope.CurrentUser);
+            File.WriteAllBytes(path, protectedBody);
             File.WriteAllText(path + ".meta", DateTimeOffset.UtcNow.ToString("O"), Encoding.UTF8);
         }
         catch
@@ -206,7 +210,19 @@ public sealed class SubscriptionFetcher
                 return null;
             if (DateTimeOffset.UtcNow - when > maxAge)
                 return null;
-            return File.ReadAllText(path, Encoding.UTF8);
+            try
+            {
+                var protectedBody = File.ReadAllBytes(path);
+                return Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                    protectedBody,
+                    null,
+                    DataProtectionScope.CurrentUser));
+            }
+            catch (CryptographicException)
+            {
+                // Migrate a cache created by versions before DPAPI protection.
+                return File.ReadAllText(path, Encoding.UTF8);
+            }
         }
         catch
         {

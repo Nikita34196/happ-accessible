@@ -45,8 +45,10 @@ public sealed class SessionHealthMonitor
         var selectiveRouting = ctx.RoutingModeTag is "proxy-list" or "app-proxy" or "app-bypass";
         if (selectiveRouting && !forceImmediate)
         {
-            if (!await ConnectivityProbe.ProbeMixedPortAsync(ctx.MixedPort).ConfigureAwait(false))
-                return HealthTickResult.Failure("локальный mixed-порт не отвечает");
+            var (selectiveOk, selectiveDetail) =
+                await ctx.ProbeFullSessionAsync().ConfigureAwait(false);
+            if (!selectiveOk)
+                return HealthTickResult.Failure(selectiveDetail);
             _healthFailStreak = 0;
             return HealthTickResult.None;
         }
@@ -66,20 +68,21 @@ public sealed class SessionHealthMonitor
         return HealthTickResult.Failure($"туннель не отвечает ({detail})");
     }
 
-    private Task<HealthTickResult> RunAwgTickAsync(HealthTickContext ctx)
+    private async Task<HealthTickResult> RunAwgTickAsync(HealthTickContext ctx)
     {
-        if (ctx.AwgTunnelRunning)
+        if (ctx.AwgTunnelRunning
+            && await ctx.ProbeAwgHandshakeAsync().ConfigureAwait(false))
         {
             _healthFailStreak = 0;
-            return Task.FromResult(HealthTickResult.None);
+            return HealthTickResult.None;
         }
 
         _healthFailStreak++;
         if (_healthFailStreak < 2)
-            return Task.FromResult(HealthTickResult.Retry("AmneziaWG туннель не отвечает"));
+            return HealthTickResult.Retry("AmneziaWG handshake не обновляется");
 
         _healthFailStreak = 0;
-        return Task.FromResult(HealthTickResult.Failure("AmneziaWG туннель остановился"));
+        return HealthTickResult.Failure("AmneziaWG handshake не обновляется");
     }
 }
 
@@ -98,6 +101,7 @@ public sealed class HealthTickContext
     public ServerProfile? ConnectedServer { get; init; }
     public required Action RefreshProxy { get; init; }
     public required Func<Task<(bool Ok, string Detail)>> ProbeFullSessionAsync { get; init; }
+    public required Func<Task<bool>> ProbeAwgHandshakeAsync { get; init; }
 }
 
 public readonly struct HealthTickResult

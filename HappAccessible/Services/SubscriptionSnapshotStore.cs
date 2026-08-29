@@ -1,4 +1,6 @@
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using HappAccessible.Models;
@@ -59,8 +61,13 @@ public sealed class SubscriptionSnapshotStore
             var dir = Path.GetDirectoryName(SnapshotPath)!;
             Directory.CreateDirectory(dir);
             var tmp = SnapshotPath + ".tmp";
-            File.WriteAllText(tmp, JsonSerializer.Serialize(snap, JsonOptions));
-            File.Copy(tmp, SnapshotPath, overwrite: true);
+            var json = JsonSerializer.Serialize(snap, JsonOptions);
+            var protectedBytes = ProtectedData.Protect(
+                Encoding.UTF8.GetBytes(json),
+                null,
+                DataProtectionScope.CurrentUser);
+            File.WriteAllBytes(tmp, protectedBytes);
+            File.Move(tmp, SnapshotPath, overwrite: true);
             try { File.Delete(tmp); } catch { /* ignore */ }
         }
         catch
@@ -75,7 +82,23 @@ public sealed class SubscriptionSnapshotStore
         {
             if (!File.Exists(SnapshotPath))
                 return null;
-            var snap = JsonSerializer.Deserialize<Snapshot>(File.ReadAllText(SnapshotPath), JsonOptions);
+            Snapshot? snap;
+            try
+            {
+                var protectedBytes = File.ReadAllBytes(SnapshotPath);
+                var json = Encoding.UTF8.GetString(ProtectedData.Unprotect(
+                    protectedBytes,
+                    null,
+                    DataProtectionScope.CurrentUser));
+                snap = JsonSerializer.Deserialize<Snapshot>(json, JsonOptions);
+            }
+            catch (CryptographicException)
+            {
+                // Read snapshots created before DPAPI protection.
+                snap = JsonSerializer.Deserialize<Snapshot>(
+                    File.ReadAllText(SnapshotPath),
+                    JsonOptions);
+            }
             if (snap is null || snap.Servers.Count == 0)
                 return null;
             if (!string.Equals(snap.SubscriptionKey, subscriptionKey, StringComparison.Ordinal))

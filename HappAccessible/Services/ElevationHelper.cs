@@ -39,7 +39,9 @@ public static class ElevationHelper
             var psi = new ProcessStartInfo
             {
                 FileName = exe,
-                Arguments = arguments ?? "",
+                Arguments = string.IsNullOrWhiteSpace(arguments)
+                    ? "--elevated-handoff"
+                    : arguments + " --elevated-handoff",
                 UseShellExecute = true,
                 Verb = "runas",
                 WorkingDirectory = Path.GetDirectoryName(exe) ?? Environment.CurrentDirectory

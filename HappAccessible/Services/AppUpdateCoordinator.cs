@@ -20,9 +20,9 @@ public sealed class AppUpdateCoordinator
 
         if (!string.IsNullOrEmpty(info.SetupExeUrl))
         {
-            var setup = await _updates.DownloadSetupAsync(info, progress, ct).ConfigureAwait(false);
+            var script = await _updates.PrepareSetupUpdateAsync(info, progress, ct).ConfigureAwait(false);
             SessionJournalService.Record($"Тихое обновление setup → {info.LatestVersion}.");
-            AppUpdateService.LaunchSetupSilent(setup);
+            AppUpdateService.LaunchUpdaterScript(script);
             return;
         }
 

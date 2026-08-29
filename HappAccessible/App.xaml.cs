@@ -10,7 +10,9 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        _singleInstance = new SingleInstanceManager();
+        var elevatedHandoff = e.Args.Any(
+            arg => string.Equals(arg, "--elevated-handoff", StringComparison.OrdinalIgnoreCase));
+        _singleInstance = new SingleInstanceManager(elevatedHandoff);
         if (!_singleInstance.IsFirstInstance)
         {
             _singleInstance.TryActivateExistingInstance();
@@ -21,6 +23,7 @@ public partial class App : System.Windows.Application
 
         base.OnStartup(e);
         AppLogService.EnsureLogFile();
+        AppUpdateService.CleanupStaleUpdateArtifacts();
         AppLogService.Info("Приложение запущено, версия " + AppUpdateService.GetCurrentVersion());
         DispatcherUnhandledException += App_DispatcherUnhandledException;
         AppDomain.CurrentDomain.UnhandledException += (_, args) =>

@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.ServiceProcess;
+using System.Text.RegularExpressions;
 using System.Text.Json;
 
 namespace HappAccessible.Services;
@@ -295,6 +296,7 @@ public sealed class AmneziaWgRunner
         }
 
         await Task.Delay(300, ct).ConfigureAwait(false);
+        AmneziaWgConfigStore.RemoveActiveConfig();
     }
 
     private static bool TunnelServiceExists(out ServiceControllerStatus status)
@@ -351,12 +353,34 @@ public sealed class AmneziaWgRunner
                 return false;
             var output = await p.StandardOutput.ReadToEndAsync(ct).ConfigureAwait(false);
             await p.WaitForExitAsync(ct).ConfigureAwait(false);
-            // "latest handshake: 3 seconds ago" / transfer counters mean peer is alive
-            var hasHandshakeLine = output.Contains("latest handshake", StringComparison.OrdinalIgnoreCase);
-            var never = output.Contains("latest handshake: 0 seconds", StringComparison.OrdinalIgnoreCase);
-            var hasTransfer = output.Contains("transfer:", StringComparison.OrdinalIgnoreCase)
-                              && output.Contains("received", StringComparison.OrdinalIgnoreCase);
-            return (hasHandshakeLine && !never) || hasTransfer;
+            var line = Regex.Match(
+                output,
+                @"latest handshake:\s*(?<age>[^\r\n]+)",
+                RegexOptions.IgnoreCase).Groups["age"].Value;
+            if (string.IsNullOrWhiteSpace(line)
+                || line.Contains("never", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            var age = TimeSpan.Zero;
+            foreach (Match part in Regex.Matches(
+                         line,
+                         @"(?<value>\d+)\s*(?<unit>second|seconds|minute|minutes|hour|hours|day|days)",
+                         RegexOptions.IgnoreCase))
+            {
+                var value = int.Parse(part.Groups["value"].Value);
+                age += part.Groups["unit"].Value.ToLowerInvariant() switch
+                {
+                    "second" or "seconds" => TimeSpan.FromSeconds(value),
+                    "minute" or "minutes" => TimeSpan.FromMinutes(value),
+                    "hour" or "hours" => TimeSpan.FromHours(value),
+                    "day" or "days" => TimeSpan.FromDays(value),
+                    _ => TimeSpan.Zero
+                };
+            }
+
+            // Keepalive/traffic may update the handshake less often than the
+            // 45-second UI tick, but an older handshake is not proof of health.
+            return age <= TimeSpan.FromMinutes(5);
         }
         catch
         {

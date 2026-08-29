@@ -557,7 +557,7 @@ public static class SingBoxConfigBuilder
         var u = new Uri(uri);
         var q = ParseQuery(u.Query);
         var sni = Q(q, "sni") ?? u.IdnHost;
-        return new Dictionary<string, object?>
+        var outbound = new Dictionary<string, object?>
         {
             ["type"] = "trojan",
             ["tag"] = "proxy",
@@ -570,6 +570,26 @@ public static class SingBoxConfigBuilder
                 ["server_name"] = sni
             }
         };
+        var type = (Q(q, "type") ?? "tcp").ToLowerInvariant();
+        if (type == "ws")
+        {
+            outbound["transport"] = new Dictionary<string, object?>
+            {
+                ["type"] = "ws",
+                ["path"] = Q(q, "path") ?? "/",
+                ["headers"] = new Dictionary<string, object?> { ["Host"] = Q(q, "host") ?? sni }
+            };
+        }
+        else if (type == "grpc")
+        {
+            outbound["transport"] = new Dictionary<string, object?>
+            {
+                ["type"] = "grpc",
+                ["service_name"] = Q(q, "serviceName") ?? Q(q, "service") ?? ""
+            };
+        }
+
+        return outbound;
     }
 
     private static Dictionary<string, object?> BuildHysteria2(string uri)
@@ -712,9 +732,7 @@ public static class SingBoxConfigBuilder
             var colon = decodedUser.IndexOf(':');
             method = decodedUser[..colon];
             password = decodedUser[(colon + 1)..];
-            var hp = hostPort.Split(':');
-            host = hp[0];
-            port = int.Parse(hp[1]);
+            (host, port) = SplitHostPort(hostPort);
         }
         else
         {
@@ -730,6 +748,24 @@ public static class SingBoxConfigBuilder
             ["method"] = method,
             ["password"] = password
         };
+    }
+
+    private static (string Host, int Port) SplitHostPort(string value)
+    {
+        value = value.Trim();
+        if (value.StartsWith('['))
+        {
+            var end = value.IndexOf(']');
+            if (end <= 1 || end + 2 > value.Length || value[end + 1] != ':'
+                || !int.TryParse(value[(end + 2)..], out var bracketPort))
+                throw new FormatException("Некорректный IPv6 host:port.");
+            return (value[1..end], bracketPort);
+        }
+
+        var colon = value.LastIndexOf(':');
+        if (colon <= 0 || !int.TryParse(value[(colon + 1)..], out var port))
+            throw new FormatException("Некорректный host:port.");
+        return (value[..colon], port);
     }
 
     private static Dictionary<string, object?> BuildVmess(string uri)

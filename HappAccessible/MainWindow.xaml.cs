@@ -41,9 +41,13 @@ public partial class MainWindow : Window
     private NetworkChangeMonitor? _networkMonitor;
     private bool _networkRecoveryBusy;
     private bool _sessionRecoveryBusy;
+    private bool _stoppingCores;
+    private bool _coreUpdateBusy;
     private DateTime _sessionConnectedUtc;
     private bool _showFavoritesOnly;
     private bool _manualDisconnect;
+    private string _activeConnectionFingerprint = "";
+    private bool _settingsReconnectBusy;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public static void ActivateExistingInstance()
@@ -142,6 +146,11 @@ public partial class MainWindow : Window
 
         // Recover from crash: leftover system proxy / AmneziaWG tunnel
         _proxy.ClearStaleOwnedProxy(_settings.MixedPort, EngineOptions.DefaultMixedPort, 10808);
+        // Remove rules left by a crashed process before attempting a new session.
+        _killSwitch.Disarm();
+        TryDeleteRuntimeSecret(_runner.ConfigPath);
+        TryDeleteRuntimeSecret(_xray.ConfigPath);
+        AmneziaWgConfigStore.RemoveActiveConfig();
         try
         {
             if (_awg.IsTunnelRunning)
@@ -310,6 +319,10 @@ public partial class MainWindow : Window
 
     private async Task CheckAndUpdateCoresOnStartupAsync()
     {
+        if (_coreUpdateBusy)
+            return;
+
+        _coreUpdateBusy = true;
         try
         {
             try
@@ -393,6 +406,10 @@ public partial class MainWindow : Window
             SetStatus("Проверка ядер не удалась: " + ex.Message);
             AppLogService.Error("Проверка/обновление ядер не удалась", ex);
             _tray?.Notify("Ошибка обновления ядер — см. Логи");
+        }
+        finally
+        {
+            _coreUpdateBusy = false;
         }
     }
 
@@ -506,7 +523,8 @@ public partial class MainWindow : Window
     {
         Dispatcher.InvokeAsync(async () =>
         {
-            if (_connectBusy || _failoverBusy || _sessionRecoveryBusy || !IsVpnConnected || _awgConnected)
+            if (_stoppingCores || _connectBusy || _failoverBusy || _sessionRecoveryBusy
+                || _coreUpdateBusy || !IsVpnConnected || _awgConnected)
                 return;
             await HandleSessionFailureAsync("ядро прокси неожиданно завершилось");
         });
@@ -565,7 +583,8 @@ public partial class MainWindow : Window
                 if (_activeCore == ProxyCoreKind.Xray)
                     return await _xray.ProbeSessionHealthAsync();
                 return await _runner.ProbeSessionHealthAsync();
-            }
+            },
+            ProbeAwgHandshakeAsync = () => _awg.HasHandshakeAsync()
         };
 
         var result = await _healthMonitor.RunTickAsync(ctx, forceImmediate);
@@ -1100,6 +1119,11 @@ public partial class MainWindow : Window
 
         _servers.Clear();
         _servers.AddRange(parsed);
+        // Persist raw imports as local subscription content so they survive
+        // restart. FetchAsync returns non-URL content unchanged.
+        _settings.SubscriptionInput = text;
+        _settings.SubscriptionLastUpdateUtc = DateTimeOffset.UtcNow;
+        PersistSettings();
         foreach (var cfg in AmneziaWgConfigStore.ListImported())
             _servers.Add(cfg.ToProfile());
         ApplyNameOverrides();
@@ -1732,15 +1756,66 @@ public partial class MainWindow : Window
     {
         if (_loadingUi)
             return;
+        var wasKillSwitchEnabled = _settings.KillSwitchEnabled;
+        var oldFingerprint = _activeConnectionFingerprint;
         CaptureSettingsFromUi();
         PersistSettings();
         RestartBackgroundTimers();
+
+        if (IsVpnConnected && wasKillSwitchEnabled != _settings.KillSwitchEnabled)
+        {
+            if (_settings.KillSwitchEnabled)
+                _killSwitch.Arm(GetActiveCoreExePath());
+            else
+                _killSwitch.Disarm();
+        }
+
+        var newFingerprint = BuildConnectionFingerprint();
+        if (IsVpnConnected
+            && !_settingsReconnectBusy
+            && !string.IsNullOrEmpty(oldFingerprint)
+            && !string.Equals(oldFingerprint, newFingerprint, StringComparison.Ordinal))
+        {
+            _ = ReconnectAfterSettingsChangeAsync();
+        }
+    }
+
+    private string BuildConnectionFingerprint() =>
+        string.Join("|",
+            TunCheck.IsChecked == true,
+            SystemProxyCheck.IsChecked == true,
+            GetSelectedTunStack(),
+            EngineOptions.ClampPort(int.TryParse(MixedPortBox.Text.Trim(), out var port)
+                ? port
+                : EngineOptions.DefaultMixedPort),
+            GetSelectedProxyCoreSetting(),
+            GetSelectedRoutingModeTag(),
+            DomainListBox.Text?.Trim() ?? "",
+            AppListBox.Text?.Trim() ?? "");
+
+    private async Task ReconnectAfterSettingsChangeAsync()
+    {
+        if (_settingsReconnectBusy || _connectedServer is null)
+            return;
+
+        _settingsReconnectBusy = true;
+        try
+        {
+            var server = _connectedServer;
+            SetStatus("Настройки подключения изменились — переподключаюсь…");
+            await ConnectAsync(allowFailover: false, server);
+        }
+        finally
+        {
+            _settingsReconnectBusy = false;
+        }
     }
 
     private void TunCheck_Changed(object sender, RoutedEventArgs e)
     {
         if (_loadingUi)
             return;
+        var oldFingerprint = _activeConnectionFingerprint;
 
         if (TunCheck.IsChecked == true)
         {
@@ -1780,6 +1855,11 @@ public partial class MainWindow : Window
         CaptureSettingsFromUi();
         PersistSettings();
         RestartBackgroundTimers();
+        if (IsVpnConnected
+            && !_settingsReconnectBusy
+            && !string.IsNullOrEmpty(oldFingerprint)
+            && !string.Equals(oldFingerprint, BuildConnectionFingerprint(), StringComparison.Ordinal))
+            _ = ReconnectAfterSettingsChangeAsync();
     }
 
     private TrayMenuSnapshot BuildTraySnapshot()
@@ -1861,13 +1941,20 @@ public partial class MainWindow : Window
 
     private async Task<ConnectOutcome> TryConnectServerAsync(ServerProfile server)
     {
-        if (_connectBusy)
+        if (_connectBusy || _coreUpdateBusy)
             return ConnectOutcome.Busy;
 
         _connectBusy = true;
         var epoch = _sessionEpoch;
+        var killSwitchWasArmed = _killSwitch.IsArmed;
+        var killSwitchCorePath = GetActiveCoreExePath();
         try
         {
+            // A recovery must be able to start the core. The firewall rules are
+            // re-armed by RecordConnectSuccess after the new tunnel is ready.
+            if (_killSwitch.IsArmed)
+                _killSwitch.Disarm();
+
             if (string.Equals(server.Protocol, "amneziawg", StringComparison.OrdinalIgnoreCase))
                 return await TryConnectAmneziaAsync(server, epoch);
 
@@ -2060,6 +2147,8 @@ public partial class MainWindow : Window
         }
         finally
         {
+            if (killSwitchWasArmed && !IsVpnConnected)
+                _killSwitch.Arm(killSwitchCorePath);
             _connectBusy = false;
         }
     }
@@ -2321,6 +2410,7 @@ public partial class MainWindow : Window
 
     private async Task DisconnectAsync(bool manual = true)
     {
+        _stoppingCores = true;
         try
         {
             _sessionEpoch++;
@@ -2330,9 +2420,12 @@ public partial class MainWindow : Window
                 _killSwitch.Disarm();
             _manualDisconnect = manual;
 
-            _proxy.DisableIfOwned();
-            await _runner.StopAsync();
-            await _xray.StopAsync();
+            try { _proxy.DisableIfOwned(); }
+            catch (Exception ex) { AppLogService.Error("Отключение системного прокси", ex); }
+            try { await _runner.StopAsync(); }
+            catch (Exception ex) { AppLogService.Error("Остановка sing-box", ex); }
+            try { await _xray.StopAsync(); }
+            catch (Exception ex) { AppLogService.Error("Остановка Xray", ex); }
             if (_awgConnected || _awg.IsTunnelRunning)
             {
                 try { await _awg.DisconnectAsync(); }
@@ -2355,6 +2448,10 @@ public partial class MainWindow : Window
             _awgConnected = false;
             UpdateConnectToggleUi();
         }
+        finally
+        {
+            _stoppingCores = false;
+        }
     }
 
     private void RecordConnectSuccess(ServerProfile server)
@@ -2362,6 +2459,7 @@ public partial class MainWindow : Window
         _sessionConnectedUtc = DateTime.UtcNow;
         _healthMonitor.ResetFailStreak();
         _manualDisconnect = false;
+        _activeConnectionFingerprint = BuildConnectionFingerprint();
 
         var unix = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         _settings.ServerLastSuccessUtc[server.RawUri] = unix;
@@ -2662,6 +2760,19 @@ public partial class MainWindow : Window
         };
     }
 
+    private static void TryDeleteRuntimeSecret(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+            // Best effort: a crashed core may still hold the file briefly.
+        }
+    }
+
     private void PersistSettings()
     {
         try
@@ -2752,11 +2863,13 @@ public partial class MainWindow : Window
 
     private void Cleanup(bool persistFromUi = true)
     {
+        _stoppingCores = true;
         _sessionEpoch++;
         _subUpdateTimer?.Stop();
         _healthTimer?.Stop();
         _pingCts?.Cancel();
-        _proxy.DisableIfOwned();
+        try { _proxy.DisableIfOwned(); }
+        catch (Exception ex) { AppLogService.Error("Cleanup: системный прокси", ex); }
         try
         {
             _runner.StopAsync().GetAwaiter().GetResult();

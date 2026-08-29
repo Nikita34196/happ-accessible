@@ -28,6 +28,7 @@ public static class SessionJournalService
         {
             lock (FileLock)
             {
+                Directory.CreateDirectory(Path.GetDirectoryName(JournalPath)!);
                 File.AppendAllText(JournalPath, line + Environment.NewLine);
             }
         }

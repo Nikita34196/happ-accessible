@@ -171,18 +171,32 @@ public sealed class AppUpdateService
         var targetDir = Path.GetFullPath(AppContext.BaseDirectory.TrimEnd('\\', '/'));
         var pid = Environment.ProcessId;
         var script = Path.Combine(updateRoot, "apply-update.ps1");
-        var ps1 = $@"
-$ErrorActionPreference = 'Stop'
-$target = '{targetDir.Replace("'", "''")}'
-$source = '{payload.Replace("'", "''")}'
-$pidToWait = {pid}
-while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}
-Start-Sleep -Seconds 1
-Copy-Item -Path (Join-Path $source '*') -Destination $target -Recurse -Force
-Start-Process -FilePath (Join-Path $target 'HappAccessible.exe')
-";
+        var ps1 = BuildPortableUpdateScript(
+            targetDir,
+            payload,
+            zipPath,
+            updateRoot,
+            pid);
         await File.WriteAllTextAsync(script, ps1, ct).ConfigureAwait(false);
         progress?.Report("Обновление готово. Приложение перезапустится.");
+        return script;
+    }
+
+    /// <summary>
+    /// Downloads Setup.exe and prepares a script that runs it silently, then
+    /// removes update artifacts from %LocalAppData%\HappAccessible\updates.
+    /// </summary>
+    public async Task<string> PrepareSetupUpdateAsync(
+        AppReleaseInfo info,
+        IProgress<string>? progress = null,
+        CancellationToken ct = default)
+    {
+        var setupPath = await DownloadSetupAsync(info, progress, ct).ConfigureAwait(false);
+        var updateRoot = UpdatesRoot;
+        var script = Path.Combine(updateRoot, "apply-setup.ps1");
+        var ps1 = BuildSetupUpdateScript(setupPath, updateRoot);
+        await File.WriteAllTextAsync(script, ps1, ct).ConfigureAwait(false);
+        progress?.Report("Установщик готов. Приложение перезапустится.");
         return script;
     }
 
@@ -205,6 +219,96 @@ Start-Process -FilePath (Join-Path $target 'HappAccessible.exe')
 
         return setupPath;
     }
+
+    /// <summary>Remove leftover portable/setup update files from previous runs.</summary>
+    public static void CleanupStaleUpdateArtifacts()
+    {
+        try
+        {
+            var root = UpdatesRoot;
+            if (!Directory.Exists(root))
+                return;
+
+            foreach (var dir in Directory.EnumerateDirectories(root, "extract-*"))
+            {
+                try { Directory.Delete(dir, recursive: true); } catch { /* ignore */ }
+            }
+
+            foreach (var pattern in new[]
+                     {
+                         "HappAccessible-*.zip",
+                         "HappAccessible-Setup-*.exe"
+                     })
+            {
+                foreach (var file in Directory.EnumerateFiles(root, pattern))
+                {
+                    try { File.Delete(file); } catch { /* ignore */ }
+                }
+            }
+        }
+        catch
+        {
+            // Best effort only.
+        }
+    }
+
+    private static string Ps1CleanupFunction => @"
+function Remove-UpdateArtifacts {
+    param(
+        [string]$Root,
+        [string[]]$Also
+    )
+    foreach ($path in $Also) {
+        if ([string]::IsNullOrWhiteSpace($path)) { continue }
+        if (Test-Path -LiteralPath $path) {
+            Remove-Item -LiteralPath $path -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    if (Test-Path -LiteralPath $Root) {
+        Get-ChildItem -LiteralPath $Root -Filter 'extract-*' -Directory -ErrorAction SilentlyContinue |
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $Root -Filter 'HappAccessible-*.zip' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $Root -Filter 'HappAccessible-Setup-*.exe' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $Root -Filter 'apply-*.ps1' -File -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+}
+";
+
+    private static string BuildPortableUpdateScript(
+        string targetDir,
+        string sourceDir,
+        string zipPath,
+        string updateRoot,
+        int pidToWait) =>
+        Ps1CleanupFunction + $@"
+$ErrorActionPreference = 'Stop'
+$target = '{EscapePs1Literal(targetDir)}'
+$source = '{EscapePs1Literal(sourceDir)}'
+$zip = '{EscapePs1Literal(zipPath)}'
+$updateRoot = '{EscapePs1Literal(updateRoot)}'
+$pidToWait = {pidToWait}
+while (Get-Process -Id $pidToWait -ErrorAction SilentlyContinue) {{ Start-Sleep -Seconds 1 }}
+Start-Sleep -Seconds 1
+Copy-Item -Path (Join-Path $source '*') -Destination $target -Recurse -Force
+Start-Process -FilePath (Join-Path $target 'HappAccessible.exe')
+Remove-UpdateArtifacts -Root $updateRoot -Also @($source, $zip, $MyInvocation.MyCommand.Path)
+";
+
+    private static string BuildSetupUpdateScript(string setupPath, string updateRoot) =>
+        Ps1CleanupFunction + $@"
+$ErrorActionPreference = 'Stop'
+$setup = '{EscapePs1Literal(setupPath)}'
+$updateRoot = '{EscapePs1Literal(updateRoot)}'
+$p = Start-Process -FilePath $setup -ArgumentList '/VERYSILENT /SUPPRESSMSGBOXES /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS /NORESTART' -PassThru -Wait
+if ($p.ExitCode -ne 0) {{ exit $p.ExitCode }}
+Remove-UpdateArtifacts -Root $updateRoot -Also @($setup, $MyInvocation.MyCommand.Path)
+";
+
+    private static string EscapePs1Literal(string value) =>
+        value.Replace("'", "''");
 
     public static void LaunchUpdaterScript(string scriptPath)
     {

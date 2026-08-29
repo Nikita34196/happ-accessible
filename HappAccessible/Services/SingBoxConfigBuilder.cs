@@ -277,7 +277,9 @@ public static class SingBoxConfigBuilder
         {
             ["log"] = new Dictionary<string, object?>
             {
-                ["level"] = "info",
+                // Per-connection info logging is expensive in TUN mode and
+                // can throttle traffic because the runner persists each line.
+                ["level"] = "warn",
                 ["timestamp"] = true
             },
             ["dns"] = dns,

@@ -161,6 +161,16 @@ public sealed class SubscriptionFetcher
 
     private static void ApplyUserInfo(AppSettings settings, HttpResponseMessage response)
     {
+        // Metadata belongs to this response. Do not keep an expiry or quota
+        // from a different subscription when the provider omits the header.
+        settings.SubscriptionUploadBytes = null;
+        settings.SubscriptionDownloadBytes = null;
+        settings.SubscriptionTotalBytes = null;
+        settings.SubscriptionExpireUnix = null;
+        settings.SubscriptionProfileTitle = null;
+        settings.SubscriptionSupportUrl = null;
+        settings.SubscriptionProfileUpdateIntervalHours = null;
+
         string? raw = null;
         if (response.Headers.TryGetValues("subscription-userinfo", out var a))
             raw = a.FirstOrDefault();
@@ -170,13 +180,55 @@ public sealed class SubscriptionFetcher
             raw = c.FirstOrDefault();
 
         var info = SubscriptionUserInfo.Parse(raw);
-        if (info is null)
-            return;
+        if (info is not null)
+        {
+            settings.SubscriptionUploadBytes = info.UploadBytes;
+            settings.SubscriptionDownloadBytes = info.DownloadBytes;
+            settings.SubscriptionTotalBytes = info.TotalBytes;
+            settings.SubscriptionExpireUnix = info.ExpireUnix > 0 ? info.ExpireUnix : null;
+        }
 
-        settings.SubscriptionUploadBytes = info.UploadBytes;
-        settings.SubscriptionDownloadBytes = info.DownloadBytes;
-        settings.SubscriptionTotalBytes = info.TotalBytes;
-        settings.SubscriptionExpireUnix = info.ExpireUnix > 0 ? info.ExpireUnix : null;
+        var title = GetHeader(response, "profile-title");
+        if (!string.IsNullOrWhiteSpace(title))
+            settings.SubscriptionProfileTitle = DecodeHeaderValue(title);
+
+        var supportUrl = GetHeader(response, "support-url");
+        if (!string.IsNullOrWhiteSpace(supportUrl))
+            settings.SubscriptionSupportUrl = supportUrl.Trim();
+
+        var interval = GetHeader(response, "profile-update-interval");
+        if (int.TryParse(interval, out var hours) && hours > 0)
+            settings.SubscriptionProfileUpdateIntervalHours = Math.Min(hours, 168);
+    }
+
+    private static string? GetHeader(HttpResponseMessage response, string name)
+    {
+        if (response.Headers.TryGetValues(name, out var values))
+            return values.FirstOrDefault();
+        if (response.Content.Headers.TryGetValues(name, out var contentValues))
+            return contentValues.FirstOrDefault();
+        return null;
+    }
+
+    private static string DecodeHeaderValue(string value)
+    {
+        var text = value.Trim();
+        try
+        {
+            var encoded = text.StartsWith("base64:", StringComparison.OrdinalIgnoreCase)
+                ? text["base64:".Length..]
+                : text;
+            encoded = encoded.Replace('-', '+').Replace('_', '/');
+            encoded = encoded.PadRight(encoded.Length + (4 - encoded.Length % 4) % 4, '=');
+            var decoded = Encoding.UTF8.GetString(Convert.FromBase64String(encoded)).Trim();
+            if (decoded.Any(char.IsLetterOrDigit))
+                return decoded;
+        }
+        catch
+        {
+            // Some panels return a plain UTF-8 title.
+        }
+        return text;
     }
 
     private static void SaveCache(string url, string body)

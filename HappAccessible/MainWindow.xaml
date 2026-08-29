@@ -64,6 +64,14 @@
                        Margin="0,0,0,8"
                        AutomationProperties.Name="Сведения о подписке"
                        Text="Подписка не задана. Alt, затем П — меню подписки." />
+            <Button x:Name="SubscriptionDetailsButton"
+                    Content="Подробнее о подписке"
+                    HorizontalAlignment="Left"
+                    MinWidth="180"
+                    MinHeight="30"
+                    Margin="0,0,0,8"
+                    Click="SubscriptionDetailsButton_OnClick"
+                    AutomationProperties.Name="Открыть подробные сведения о подписке" />
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
                 <Button x:Name="PingSelectedButton"

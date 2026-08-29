@@ -1155,6 +1155,7 @@ public partial class MainWindow : Window
             || normalized.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
             || CryptLinkHandler.IsHappCrypt(normalized))
         {
+            ResetSubscriptionMetadata();
             _settings.SubscriptionInput = normalized;
             PersistSettings();
             UpdateSubscriptionInfo();
@@ -1178,6 +1179,7 @@ public partial class MainWindow : Window
         // Persist raw imports as local subscription content so they survive
         // restart. FetchAsync returns non-URL content unchanged.
         _settings.SubscriptionInput = text;
+        ResetSubscriptionMetadata();
         _settings.SubscriptionLastUpdateUtc = DateTimeOffset.UtcNow;
         PersistSettings();
         foreach (var cfg in AmneziaWgConfigStore.ListImported())
@@ -1340,6 +1342,9 @@ public partial class MainWindow : Window
         if (SubscriptionInfoText is null)
             return;
 
+        if (SubscriptionDetailsButton is not null)
+            SubscriptionDetailsButton.IsEnabled = !string.IsNullOrWhiteSpace(_settings.SubscriptionInput);
+
         var parts = new List<string>();
         var raw = _settings.SubscriptionInput?.Trim() ?? "";
         if (string.IsNullOrEmpty(raw))
@@ -1367,6 +1372,9 @@ public partial class MainWindow : Window
                 ? $"Подписка: список ({lines} строк)"
                 : "Подписка сохранена");
         }
+
+        if (!string.IsNullOrWhiteSpace(_settings.SubscriptionProfileTitle))
+            parts.Insert(0, $"профиль «{_settings.SubscriptionProfileTitle.Trim()}»");
 
         var updated = _settings.SubscriptionLastUpdateUtc
                       ?? SubscriptionFetcher.TryGetCacheTimestamp(raw);
@@ -1396,12 +1404,97 @@ public partial class MainWindow : Window
             var exp = DateTimeOffset.FromUnixTimeSeconds(_settings.SubscriptionExpireUnix.Value).ToLocalTime();
             var left = exp - DateTimeOffset.Now;
             parts.Add(left.TotalSeconds > 0
-                ? $"действует до {exp:dd.MM.yyyy HH:mm} ({FormatDuration(left)})"
+                ? $"действует до {exp:dd.MM.yyyy HH:mm} (осталось {FormatDuration(left)})"
                 : $"срок истёк {exp:dd.MM.yyyy}");
         }
 
+        if (_servers.Count > 0)
+            parts.Add($"серверов {_servers.Count}");
         parts.Add("F5 — обновить");
         SubscriptionInfoText.Text = string.Join(". ", parts) + ".";
+    }
+
+    private void SubscriptionDetailsButton_OnClick(object sender, RoutedEventArgs e)
+    {
+        var raw = _settings.SubscriptionInput?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            SetStatus("Сначала добавьте ссылку или список серверов подписки.");
+            return;
+        }
+
+        var source = "Локальный список серверов";
+        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)
+            && uri.Host.Length > 0
+            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
+            source = uri.Host;
+
+        var used = (_settings.SubscriptionUploadBytes ?? 0)
+                   + (_settings.SubscriptionDownloadBytes ?? 0);
+        var total = _settings.SubscriptionTotalBytes ?? 0;
+        var remaining = total > 0
+            ? FormatBytes(Math.Max(0, total - used))
+            : "не предоставлено";
+
+        var expiry = "не указан";
+        var state = "активна";
+        if (_settings.SubscriptionExpireUnix is > 0)
+        {
+            var exp = DateTimeOffset.FromUnixTimeSeconds(_settings.SubscriptionExpireUnix.Value).ToLocalTime();
+            var left = exp - DateTimeOffset.Now;
+            expiry = left.TotalSeconds > 0
+                ? $"{exp:dd.MM.yyyy HH:mm} (осталось {FormatDuration(left)})"
+                : $"{exp:dd.MM.yyyy HH:mm} (срок истёк)";
+            state = left.TotalSeconds > 0
+                ? $"активна, осталось {FormatDuration(left)}"
+                : "срок истёк";
+        }
+
+        var updated = _settings.SubscriptionLastUpdateUtc?.ToLocalTime() is { } updatedLocal
+            ? updatedLocal.ToString("dd.MM.yyyy HH:mm")
+            : "неизвестно";
+        var profileHours = _settings.SubscriptionProfileUpdateIntervalHours;
+        var interval = profileHours is > 0
+            ? $"по рекомендации сервера, каждые {profileHours} ч"
+            : "вручную или по настройке приложения";
+        var title = string.IsNullOrWhiteSpace(_settings.SubscriptionProfileTitle)
+            ? "Подписка"
+            : _settings.SubscriptionProfileTitle.Trim();
+        var endpoints = _servers
+            .Select(s => $"{s.Host}|{s.Port}")
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+        var serverCount = $"{_servers.Count} (уникальных endpoint: {endpoints})";
+
+        var dialog = new SubscriptionDetailsWindow(
+            title,
+            source,
+            serverCount,
+            FormatBytes(used),
+            remaining,
+            expiry,
+            updated,
+            interval,
+            state,
+            string.IsNullOrWhiteSpace(_settings.SubscriptionSupportUrl)
+                ? "не указан"
+                : _settings.SubscriptionSupportUrl.Trim())
+        {
+            Owner = this
+        };
+        dialog.ShowDialog();
+    }
+
+    private void ResetSubscriptionMetadata()
+    {
+        _settings.SubscriptionLastUpdateUtc = null;
+        _settings.SubscriptionUploadBytes = null;
+        _settings.SubscriptionDownloadBytes = null;
+        _settings.SubscriptionTotalBytes = null;
+        _settings.SubscriptionExpireUnix = null;
+        _settings.SubscriptionProfileTitle = null;
+        _settings.SubscriptionSupportUrl = null;
+        _settings.SubscriptionProfileUpdateIntervalHours = null;
     }
 
     private static string FormatBytes(long bytes)
@@ -1421,9 +1514,13 @@ public partial class MainWindow : Window
 
     private static string FormatDuration(TimeSpan t)
     {
-        if (t.TotalDays >= 2)
-            return $"{(int)t.TotalDays} дн.";
-        if (t.TotalHours >= 2)
+        if (t.TotalDays >= 1)
+        {
+            var days = (int)t.TotalDays;
+            var hours = t.Hours;
+            return hours > 0 ? $"{days} дн. {hours} ч" : $"{days} дн.";
+        }
+        if (t.TotalHours >= 1)
             return $"{(int)t.TotalHours} ч";
         return $"{Math.Max(1, (int)t.TotalMinutes)} мин";
     }

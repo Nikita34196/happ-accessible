@@ -80,6 +80,12 @@ public sealed class AppSettings
     public long? SubscriptionTotalBytes { get; set; }
     /// <summary>Unix expiry from subscription-userinfo (seconds).</summary>
     public long? SubscriptionExpireUnix { get; set; }
+    /// <summary>Optional profile title from the subscription response.</summary>
+    public string? SubscriptionProfileTitle { get; set; }
+    /// <summary>Optional support URL from the subscription response.</summary>
+    public string? SubscriptionSupportUrl { get; set; }
+    /// <summary>Provider's requested refresh interval in hours.</summary>
+    public int? SubscriptionProfileUpdateIntervalHours { get; set; }
 
     private static string SettingsPath =>
         Path.Combine(

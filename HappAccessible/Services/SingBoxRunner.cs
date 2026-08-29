@@ -196,6 +196,7 @@ public sealed class SingBoxRunner : IDisposable
         _activeMixedPort = EngineOptions.ClampPort(engine.MixedPort);
 
         lock (_log) _log.Clear();
+        ResetLogFile();
 
         var json = SingBoxConfigBuilder.Build(server, tun, routing, engine);
         // Keep a stable path + a timestamped copy for debugging (like Vireo temp configs)
@@ -264,15 +265,16 @@ public sealed class SingBoxRunner : IDisposable
 
     public async Task StopAsync()
     {
-        if (_process is null)
+        var process = Interlocked.Exchange(ref _process, null);
+        if (process is null)
             return;
 
         try
         {
-            if (!_process.HasExited)
+            if (!process.HasExited)
             {
-                _process.Kill(entireProcessTree: true);
-                await _process.WaitForExitAsync().ConfigureAwait(false);
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync().ConfigureAwait(false);
             }
         }
         catch
@@ -281,9 +283,23 @@ public sealed class SingBoxRunner : IDisposable
         }
         finally
         {
-            _process.Dispose();
-            _process = null;
+            process.Dispose();
             try { if (File.Exists(ConfigPath)) File.Delete(ConfigPath); } catch { /* best effort */ }
+        }
+    }
+
+    private void ResetLogFile()
+    {
+        try
+        {
+            File.WriteAllText(
+                LogPath,
+                $"# sing-box log — started {DateTime.Now:yyyy-MM-dd HH:mm:ss}{Environment.NewLine}",
+                Encoding.UTF8);
+        }
+        catch
+        {
+            // Logging must never interfere with starting the tunnel.
         }
     }
 

@@ -559,14 +559,18 @@ public partial class MainWindow : Window
 
     private async Task HandleNetworkRecoveryAsync(string reason)
     {
-        if (_networkRecoveryBusy || _connectBusy || _failoverBusy || !IsVpnConnected)
+        if (_manualDisconnect || _stoppingCores
+            || _networkRecoveryBusy || _connectBusy || _failoverBusy || !IsVpnConnected)
             return;
 
         _networkRecoveryBusy = true;
+        var epoch = _sessionEpoch;
         try
         {
             SetStatus($"Сеть: {reason}. Проверяю соединение…", important: false);
             await HealthCheckTickAsync(forceImmediate: true);
+            if (epoch != _sessionEpoch || _manualDisconnect || _stoppingCores)
+                return;
         }
         finally
         {
@@ -644,7 +648,7 @@ public partial class MainWindow : Window
         };
 
         var result = await _healthMonitor.RunTickAsync(ctx, forceImmediate);
-        if (_connectBusy || _failoverBusy)
+        if (_connectBusy || _failoverBusy || _manualDisconnect || _stoppingCores || !IsVpnConnected)
             return;
 
         switch (result.ResultKind)

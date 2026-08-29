@@ -211,10 +211,10 @@
                           Unchecked="SettingsControl_Changed"
                           AutomationProperties.Name="Автоподключение при запуске" />
                 <CheckBox x:Name="StartMinimizedCheck"
-                          Content="Сворачивать в трей (_M)"
+                          Content="Сворачивать в трей при закрытии (_M)"
                           Checked="SettingsControl_Changed"
                           Unchecked="SettingsControl_Changed"
-                          AutomationProperties.Name="Сворачивать в трей вместо закрытия" />
+                          AutomationProperties.Name="Сворачивать в трей при закрытии окна" />
             </StackPanel>
 
             <StackPanel Orientation="Horizontal" Margin="0,8,0,0">

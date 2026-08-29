@@ -211,9 +211,6 @@ public partial class MainWindow : Window
                 SelectLastServer();
         }
 
-        if (_settings.StartMinimizedToTray)
-            _tray.HideWindowToTray();
-
         _ = CheckAndUpdateCoresOnStartupAsync();
         _ = CheckAndUpdateAppOnStartupAsync();
     }

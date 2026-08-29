@@ -14,6 +14,7 @@ public sealed class AppSettings
     /// <summary>Local mixed inbound port (default 2080).</summary>
     public int MixedPort { get; set; } = 2080;
     public bool AutoConnect { get; set; }
+    /// <summary>Hide to tray when the window is closed or minimized, not on app startup.</summary>
     public bool StartMinimizedToTray { get; set; }
     public string? LastServerUri { get; set; }
     public string? LastServerName { get; set; }

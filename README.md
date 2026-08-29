@@ -2,7 +2,7 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.24)
+## Возможности (0.3.25)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**
 - **AmneziaWG / WireGuard** — импорт `.conf`
@@ -56,11 +56,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.24` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.25` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.24
-git push origin v0.3.24
+git tag v0.3.25
+git push origin v0.3.25
 ```
 
 ## Клавиши

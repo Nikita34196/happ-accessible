@@ -10,6 +10,9 @@ namespace HappAccessible.Services;
 
 public sealed class SubscriptionFetcher
 {
+    // Compatibility identity used by panels that recognize the official Happ client.
+    private const string CompatibilityUserAgent = "Happ/3.3.6";
+
     private static readonly HttpClient Http = new(new HttpClientHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
@@ -18,16 +21,6 @@ public sealed class SubscriptionFetcher
     {
         Timeout = TimeSpan.FromSeconds(45)
     };
-
-    private static readonly string[] FallbackAgents =
-    [
-        // Remnawave (Geodema): URI-list only with HWID + these UAs; Happ gets Xray JSON we don't parse yet
-        "HiddifyNext/2.5.7",
-        "v2rayN/6.45",
-        "nekobox",
-        "v2rayNG/1.8.19",
-        "Happ/3.3.6"
-    ];
 
     private static string CacheDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -50,9 +43,9 @@ public sealed class SubscriptionFetcher
         var agents = new List<string>();
         if (!string.IsNullOrWhiteSpace(settings.CustomUserAgent))
             agents.Add(settings.CustomUserAgent.Trim());
-        if (!string.IsNullOrWhiteSpace(settings.LastSuccessfulUserAgent))
-            agents.Add(settings.LastSuccessfulUserAgent.Trim());
-        agents.AddRange(FallbackAgents);
+        if (settings.LastSuccessfulUserAgent is { } lastUa && IsOwnUserAgent(lastUa))
+            agents.Add(lastUa.Trim());
+        agents.Add(GetApplicationUserAgent());
 
         Exception? lastError = null;
         HttpStatusCode? lastCode = null;
@@ -333,6 +326,14 @@ public sealed class SubscriptionFetcher
         req.Headers.TryAddWithoutValidation("x-device-model", "PC");
         req.Headers.TryAddWithoutValidation("x-app-version", "3.3.6");
     }
+
+    private static string GetApplicationUserAgent() =>
+        CompatibilityUserAgent;
+
+    private static bool IsOwnUserAgent(string? userAgent) =>
+        !string.IsNullOrWhiteSpace(userAgent)
+        && userAgent.Trim().StartsWith("Happ/", StringComparison.OrdinalIgnoreCase)
+        && !userAgent.Trim().StartsWith("HappAccessible/", StringComparison.OrdinalIgnoreCase);
 
     private static void EnsureHwid(AppSettings settings) =>
         DeviceHwidService.EnsureHwid(settings);

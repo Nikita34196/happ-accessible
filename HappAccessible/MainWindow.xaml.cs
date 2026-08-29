@@ -1335,6 +1335,7 @@ public partial class MainWindow : Window
 
             if (!quiet)
                 SetStatus("Ошибка загрузки: " + ex.Message);
+            AppLogService.Error("Ошибка загрузки подписки", ex);
         }
     }
 
@@ -2790,7 +2791,8 @@ public partial class MainWindow : Window
             DnsStrategy = _settings.DnsStrategy,
             DnsRemoteServer = _settings.DnsRemoteServer,
             DnsRemoteFallback = _settings.DnsRemoteFallback,
-            RejectQuicUdp443 = _settings.RejectQuicUdp443
+            RejectQuicUdp443 = _settings.RejectQuicUdp443,
+            SubscriptionBypassHost = SubscriptionFetcher.TryGetSubscriptionHost(_settings.SubscriptionInput)
         };
     }
 

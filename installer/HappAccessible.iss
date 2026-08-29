@@ -1,6 +1,6 @@
 ﻿; Happ Accessible вЂ” Inno Setup installer
 #define MyAppName "Happ Accessible"
-#define MyAppVersion "0.3.26"
+#define MyAppVersion "0.3.27"
 #define MyAppPublisher "Happ Accessible"
 #define MyAppExeName "HappAccessible.exe"
 #define MyAppId "{{A7C3E91B-4F2D-4A8E-9B1C-6D5E8F0A2B3C}"

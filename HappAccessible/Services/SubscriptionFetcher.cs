@@ -1,6 +1,8 @@
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -13,14 +15,60 @@ public sealed class SubscriptionFetcher
     // Compatibility identity used by panels that recognize the official Happ client.
     private const string CompatibilityUserAgent = "Happ/3.3.6";
 
-    private static readonly HttpClient Http = new(new HttpClientHandler
+    private static readonly HttpClient Http = new(CreateHandler())
+    {
+        Timeout = TimeSpan.FromSeconds(25)
+    };
+
+    private static SocketsHttpHandler CreateHandler() => new()
     {
         AutomaticDecompression = DecompressionMethods.All,
-        AllowAutoRedirect = true
-    })
-    {
-        Timeout = TimeSpan.FromSeconds(45)
+        AllowAutoRedirect = true,
+        // Subscription must load directly. System/VPN proxy breaks HTTPS here.
+        UseProxy = false,
+        ConnectTimeout = TimeSpan.FromSeconds(20),
+        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        ConnectCallback = ConnectPreferIpv4Async,
+        SslOptions =
+        {
+            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
+        }
     };
+
+    private static async ValueTask<Stream> ConnectPreferIpv4Async(
+        SocketsHttpConnectionContext context,
+        CancellationToken cancellationToken)
+    {
+        var host = context.DnsEndPoint.Host;
+        var port = context.DnsEndPoint.Port;
+        IPAddress? address = null;
+
+        try
+        {
+            var entries = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
+            address = entries.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
+                      ?? entries.FirstOrDefault();
+        }
+        catch (Exception ex)
+        {
+            throw new HttpRequestException($"Не удалось разрешить имя хоста: {host}", ex);
+        }
+
+        if (address is null)
+            throw new HttpRequestException($"Не удалось разрешить имя хоста: {host}");
+
+        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+        try
+        {
+            await socket.ConnectAsync(new IPEndPoint(address, port), cancellationToken).ConfigureAwait(false);
+            return new NetworkStream(socket, ownsSocket: true);
+        }
+        catch
+        {
+            socket.Dispose();
+            throw;
+        }
+    }
 
     private static string CacheDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -104,6 +152,9 @@ public sealed class SubscriptionFetcher
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 lastError = ex;
+                AppLogService.Error($"Subscription fetch failed ({SafeHost(input)}, UA={ua})", ex);
+                if (IsTransportFailure(ex))
+                    break;
                 await Task.Delay(400, ct).ConfigureAwait(false);
             }
         }
@@ -122,8 +173,18 @@ public sealed class SubscriptionFetcher
 
         throw new InvalidOperationException(
             $"Не удалось загрузить подписку (HTTP {code}, {SafeHost(input)}).{hint}"
+            + DescribeFetchFailure(lastError)
             + (lastSnippet is null ? "" : " Ответ: " + lastSnippet)
             + (lastError is null ? "" : " (" + lastError.Message + ")"));
+    }
+
+    public static string? TryGetSubscriptionHost(string? urlOrContent)
+    {
+        var input = NormalizeInput(urlOrContent ?? "");
+        if (!IsHttpUrl(input))
+            return null;
+        try { return new Uri(input).Host; }
+        catch { return null; }
     }
 
     public static string? TryLoadCacheOnly(string urlOrContent)
@@ -386,5 +447,30 @@ public sealed class SubscriptionFetcher
     {
         s = s.Replace('\r', ' ').Replace('\n', ' ').Trim();
         return s.Length <= max ? s : s[..max] + "…";
+    }
+
+    private static bool IsTransportFailure(Exception ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur is HttpRequestException or AuthenticationException or IOException or SocketException)
+                return true;
+
+            var msg = cur.Message;
+            if (msg.Contains("SSL", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("certificate", StringComparison.OrdinalIgnoreCase)
+                || msg.Contains("TLS", StringComparison.OrdinalIgnoreCase))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static string DescribeFetchFailure(Exception? ex)
+    {
+        if (ex is null || !IsTransportFailure(ex))
+            return "";
+
+        return " Проверьте интернет, отключите VPN и системный прокси Windows, затем нажмите «Обновить подписку».";
     }
 }

@@ -107,6 +107,16 @@ public static class SingBoxConfigBuilder
             }
         }
 
+        if (!string.IsNullOrWhiteSpace(engine.SubscriptionBypassHost)
+            && !string.Equals(engine.SubscriptionBypassHost, server.Host, StringComparison.OrdinalIgnoreCase))
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["domain"] = new[] { engine.SubscriptionBypassHost.Trim() },
+                ["outbound"] = "direct"
+            });
+        }
+
         var finalOutbound = "proxy";
         var dnsFinal = "dns-remote";
         List<object>? ruleSets = null;

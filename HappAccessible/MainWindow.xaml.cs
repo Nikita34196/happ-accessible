@@ -1343,8 +1343,10 @@ public partial class MainWindow : Window
         if (SubscriptionInfoText is null)
             return;
 
-        if (SubscriptionDetailsButton is not null)
-            SubscriptionDetailsButton.IsEnabled = !string.IsNullOrWhiteSpace(_settings.SubscriptionInput);
+        if (SubscriptionRefreshButton is not null)
+            SubscriptionRefreshButton.IsEnabled = !string.IsNullOrWhiteSpace(_settings.SubscriptionInput)
+                                                 && !AmneziaWgConfigStore.LooksLikeConf(
+                                                     _settings.SubscriptionInput);
 
         var parts = new List<string>();
         var raw = _settings.SubscriptionInput?.Trim() ?? "";
@@ -1407,84 +1409,29 @@ public partial class MainWindow : Window
             parts.Add(left.TotalSeconds > 0
                 ? $"действует до {exp:dd.MM.yyyy HH:mm} (осталось {FormatDuration(left)})"
                 : $"срок истёк {exp:dd.MM.yyyy}");
+            parts.Add(left.TotalSeconds > 0 ? "состояние активна" : "состояние срок истёк");
+        }
+        else
+        {
+            parts.Add("состояние активна");
         }
 
         if (_servers.Count > 0)
             parts.Add($"серверов {_servers.Count}");
-        parts.Add("F5 — обновить");
+        else
+            parts.Add("серверов 0");
+
+        var interval = _settings.SubscriptionProfileUpdateIntervalHours is > 0
+            ? $"автообновление каждые {_settings.SubscriptionProfileUpdateIntervalHours} ч"
+            : "автообновление вручную или по настройке приложения";
+        parts.Add(interval);
+        if (!string.IsNullOrWhiteSpace(_settings.SubscriptionSupportUrl))
+            parts.Add($"поддержка {_settings.SubscriptionSupportUrl.Trim()}");
         SubscriptionInfoText.Text = string.Join(". ", parts) + ".";
     }
 
-    private void SubscriptionDetailsButton_OnClick(object sender, RoutedEventArgs e)
-    {
-        var raw = _settings.SubscriptionInput?.Trim() ?? "";
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            SetStatus("Сначала добавьте ссылку или список серверов подписки.");
-            return;
-        }
-
-        var source = "Локальный список серверов";
-        if (Uri.TryCreate(raw, UriKind.Absolute, out var uri)
-            && uri.Host.Length > 0
-            && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
-            source = uri.Host;
-
-        var used = (_settings.SubscriptionUploadBytes ?? 0)
-                   + (_settings.SubscriptionDownloadBytes ?? 0);
-        var total = _settings.SubscriptionTotalBytes ?? 0;
-        var remaining = total > 0
-            ? FormatBytes(Math.Max(0, total - used))
-            : "не предоставлено";
-
-        var expiry = "не указан";
-        var state = "активна";
-        if (_settings.SubscriptionExpireUnix is > 0)
-        {
-            var exp = DateTimeOffset.FromUnixTimeSeconds(_settings.SubscriptionExpireUnix.Value).ToLocalTime();
-            var left = exp - DateTimeOffset.Now;
-            expiry = left.TotalSeconds > 0
-                ? $"{exp:dd.MM.yyyy HH:mm} (осталось {FormatDuration(left)})"
-                : $"{exp:dd.MM.yyyy HH:mm} (срок истёк)";
-            state = left.TotalSeconds > 0
-                ? $"активна, осталось {FormatDuration(left)}"
-                : "срок истёк";
-        }
-
-        var updated = _settings.SubscriptionLastUpdateUtc?.ToLocalTime() is { } updatedLocal
-            ? updatedLocal.ToString("dd.MM.yyyy HH:mm")
-            : "неизвестно";
-        var profileHours = _settings.SubscriptionProfileUpdateIntervalHours;
-        var interval = profileHours is > 0
-            ? $"по рекомендации сервера, каждые {profileHours} ч"
-            : "вручную или по настройке приложения";
-        var title = string.IsNullOrWhiteSpace(_settings.SubscriptionProfileTitle)
-            ? "Подписка"
-            : _settings.SubscriptionProfileTitle.Trim();
-        var endpoints = _servers
-            .Select(s => $"{s.Host}|{s.Port}")
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-        var serverCount = $"{_servers.Count} (уникальных endpoint: {endpoints})";
-
-        var dialog = new SubscriptionDetailsWindow(
-            title,
-            source,
-            serverCount,
-            FormatBytes(used),
-            remaining,
-            expiry,
-            updated,
-            interval,
-            state,
-            string.IsNullOrWhiteSpace(_settings.SubscriptionSupportUrl)
-                ? "не указан"
-                : _settings.SubscriptionSupportUrl.Trim())
-        {
-            Owner = this
-        };
-        dialog.ShowDialog();
-    }
+    private async void SubscriptionRefreshButton_OnClick(object sender, RoutedEventArgs e) =>
+        await RefreshSubscriptionAsync();
 
     private void ResetSubscriptionMetadata()
     {

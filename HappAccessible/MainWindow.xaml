@@ -59,19 +59,25 @@
                    Text="Готово. Alt — меню «Подписка»." />
 
         <StackPanel Margin="12,8,12,0">
-            <TextBlock x:Name="SubscriptionInfoText"
-                       TextWrapping="Wrap"
-                       Margin="0,0,0,8"
-                       AutomationProperties.Name="Сведения о подписке"
-                       Text="Подписка не задана. Alt, затем П — меню подписки." />
-            <Button x:Name="SubscriptionDetailsButton"
-                    Content="Подробнее о подписке"
-                    HorizontalAlignment="Left"
-                    MinWidth="180"
-                    MinHeight="30"
-                    Margin="0,0,0,8"
-                    Click="SubscriptionDetailsButton_OnClick"
-                    AutomationProperties.Name="Открыть подробные сведения о подписке" />
+            <GroupBox Header="Сведения о подписке"
+                      Margin="0,0,0,8"
+                      AutomationProperties.Name="Сведения о подписке">
+                <DockPanel Margin="8">
+                    <Button x:Name="SubscriptionRefreshButton"
+                            DockPanel.Dock="Bottom"
+                            Content="Обновить подписку (_U)"
+                            HorizontalAlignment="Left"
+                            MinWidth="180"
+                            MinHeight="30"
+                            Margin="0,8,0,0"
+                            Click="SubscriptionRefreshButton_OnClick"
+                            AutomationProperties.Name="Обновить сведения о подписке" />
+                    <TextBlock x:Name="SubscriptionInfoText"
+                               TextWrapping="Wrap"
+                               AutomationProperties.Name="Подробные сведения о подписке"
+                               Text="Подписка не задана. Alt, затем П — меню подписки." />
+                </DockPanel>
+            </GroupBox>
 
             <StackPanel Orientation="Horizontal" Margin="0,0,0,0">
                 <Button x:Name="PingSelectedButton"

@@ -15,8 +15,6 @@ public sealed class EngineOptions
     public string DnsRemoteFallback { get; init; } = "8.8.8.8";
     /// <summary>Reject QUIC/UDP443 for xhttp/splithttp transports that stall on UDP.</summary>
     public bool RejectQuicUdp443 { get; init; } = true;
-    /// <summary>Subscription panel host — routed direct in TUN so refresh works while connected.</summary>
-    public string? SubscriptionBypassHost { get; init; }
 
     public static int ClampPort(int port) =>
         port is >= 1024 and <= 65535 ? port : DefaultMixedPort;

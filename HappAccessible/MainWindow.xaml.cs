@@ -2791,8 +2791,7 @@ public partial class MainWindow : Window
             DnsStrategy = _settings.DnsStrategy,
             DnsRemoteServer = _settings.DnsRemoteServer,
             DnsRemoteFallback = _settings.DnsRemoteFallback,
-            RejectQuicUdp443 = _settings.RejectQuicUdp443,
-            SubscriptionBypassHost = SubscriptionFetcher.TryGetSubscriptionHost(_settings.SubscriptionInput)
+            RejectQuicUdp443 = _settings.RejectQuicUdp443
         };
     }
 

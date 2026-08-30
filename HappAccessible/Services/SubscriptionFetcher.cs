@@ -15,60 +15,14 @@ public sealed class SubscriptionFetcher
     // Compatibility identity used by panels that recognize the official Happ client.
     private const string CompatibilityUserAgent = "Happ/3.3.6";
 
-    private static readonly HttpClient Http = new(CreateHandler())
-    {
-        Timeout = TimeSpan.FromSeconds(25)
-    };
-
-    private static SocketsHttpHandler CreateHandler() => new()
+    private static readonly HttpClient Http = new(new HttpClientHandler
     {
         AutomaticDecompression = DecompressionMethods.All,
-        AllowAutoRedirect = true,
-        // Subscription must load directly. System/VPN proxy breaks HTTPS here.
-        UseProxy = false,
-        ConnectTimeout = TimeSpan.FromSeconds(20),
-        PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-        ConnectCallback = ConnectPreferIpv4Async,
-        SslOptions =
-        {
-            EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13
-        }
-    };
-
-    private static async ValueTask<Stream> ConnectPreferIpv4Async(
-        SocketsHttpConnectionContext context,
-        CancellationToken cancellationToken)
+        AllowAutoRedirect = true
+    })
     {
-        var host = context.DnsEndPoint.Host;
-        var port = context.DnsEndPoint.Port;
-        IPAddress? address = null;
-
-        try
-        {
-            var entries = await Dns.GetHostAddressesAsync(host, cancellationToken).ConfigureAwait(false);
-            address = entries.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
-                      ?? entries.FirstOrDefault();
-        }
-        catch (Exception ex)
-        {
-            throw new HttpRequestException($"Не удалось разрешить имя хоста: {host}", ex);
-        }
-
-        if (address is null)
-            throw new HttpRequestException($"Не удалось разрешить имя хоста: {host}");
-
-        var socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-        try
-        {
-            await socket.ConnectAsync(new IPEndPoint(address, port), cancellationToken).ConfigureAwait(false);
-            return new NetworkStream(socket, ownsSocket: true);
-        }
-        catch
-        {
-            socket.Dispose();
-            throw;
-        }
-    }
+        Timeout = TimeSpan.FromSeconds(45)
+    };
 
     private static string CacheDir =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -176,15 +130,6 @@ public sealed class SubscriptionFetcher
             + DescribeFetchFailure(lastError)
             + (lastSnippet is null ? "" : " Ответ: " + lastSnippet)
             + (lastError is null ? "" : " (" + lastError.Message + ")"));
-    }
-
-    public static string? TryGetSubscriptionHost(string? urlOrContent)
-    {
-        var input = NormalizeInput(urlOrContent ?? "");
-        if (!IsHttpUrl(input))
-            return null;
-        try { return new Uri(input).Host; }
-        catch { return null; }
     }
 
     public static string? TryLoadCacheOnly(string urlOrContent)

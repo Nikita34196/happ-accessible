@@ -2,7 +2,7 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.28)
+## Возможности (0.3.29)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**
 - **AmneziaWG / WireGuard** — импорт `.conf`
@@ -17,7 +17,7 @@
 - Секреты подписки/Remnawave в DPAPI; стабильный HWID для панелей
 - Сохранение последнего рабочего списка серверов при ошибке подписки
 - Один экземпляр приложения (повторный запуск активирует окно)
-- DNS через DoH с резервным сервером, ротация DNS-кэша sing-box; подсказка про Secure DNS в Chrome
+- **DNS-профили Happ** — импорт `happ://routing/add/…` (DoU/DoH, FakeDNS, DnsHosts BlancVPN)
 - Транзакционное обновление ядер sing-box/Xray (backup + откат)
 - Информация о подписке: трафик, срок, время обновления
 - Переименование серверов (F2), сохраняется локально
@@ -56,11 +56,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.28` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.29` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.28
-git push origin v0.3.28
+git tag v0.3.29
+git push origin v0.3.29
 ```
 
 ## Клавиши

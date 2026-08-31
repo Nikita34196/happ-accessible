@@ -50,6 +50,15 @@ public sealed class AppSettings
     public string DnsStrategy { get; set; } = "ipv4_only";
     public string DnsRemoteServer { get; set; } = "1.1.1.1";
     public string DnsRemoteFallback { get; set; } = "8.8.8.8";
+    /// <summary>DoH | DoU | DoT</summary>
+    public string DnsRemoteType { get; set; } = "DoH";
+    public string DnsRemoteDomain { get; set; } = "";
+    public string DnsDomesticServer { get; set; } = "1.0.0.1";
+    public string DnsDomesticType { get; set; } = "DoU";
+    public string DnsDomesticDomain { get; set; } = "";
+    public bool FakeDns { get; set; }
+    /// <summary>Imported Happ routing/DNS profile id; empty = built-in DNS.</summary>
+    public string? ActiveRoutingProfileId { get; set; }
     /// <summary>Enable the QUIC workaround for xhttp/splithttp links.</summary>
     public bool RejectQuicUdp443 { get; set; } = true;
     /// <summary>Proactively restart tunnel every N minutes (0 = off).</summary>

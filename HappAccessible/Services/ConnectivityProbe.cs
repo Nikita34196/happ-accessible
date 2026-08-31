@@ -63,20 +63,45 @@ public static class ConnectivityProbe
             ct.ThrowIfCancellationRequested();
             if (process.HasExited)
                 return;
-            if (sw.ElapsedMilliseconds >= 350)
-                return;
             await Task.Delay(100, ct).ConfigureAwait(false);
         }
     }
 
+    public static async Task<bool> WaitForMixedPortReadyAsync(
+        int mixedPort,
+        Process process,
+        TimeSpan maxWait,
+        CancellationToken ct = default)
+    {
+        var sw = Stopwatch.StartNew();
+        while (sw.Elapsed < maxWait)
+        {
+            ct.ThrowIfCancellationRequested();
+            if (process.HasExited)
+                return false;
+            if (await ProbeMixedPortAsync(mixedPort, ct).ConfigureAwait(false))
+                return true;
+            await Task.Delay(250, ct).ConfigureAwait(false);
+        }
+
+        return await ProbeMixedPortAsync(mixedPort, ct).ConfigureAwait(false);
+    }
+
     public static async Task<bool> ProbeHttpViaProxyAsync(
-        int mixedPort, CancellationToken ct = default) =>
-        await ProbeHttpLatencyViaProxyAsync(mixedPort, ct).ConfigureAwait(false) is not null;
+        int mixedPort,
+        CancellationToken ct = default,
+        int attempts = 1,
+        TimeSpan? retryDelay = null) =>
+        await ProbeHttpLatencyViaProxyAsync(mixedPort, ct, attempts, retryDelay).ConfigureAwait(false) is not null;
 
     /// <summary>HTTP round-trip via local mixed port — reflects real tunnel latency.</summary>
     public static async Task<int?> ProbeHttpLatencyViaProxyAsync(
-        int mixedPort, CancellationToken ct = default)
+        int mixedPort,
+        CancellationToken ct = default,
+        int attempts = 1,
+        TimeSpan? retryDelay = null)
     {
+        retryDelay ??= TimeSpan.FromSeconds(2);
         var urls = new[]
         {
             "http://www.gstatic.com/generate_204",
@@ -84,31 +109,40 @@ public static class ConnectivityProbe
             "http://cp.cloudflare.com/"
         };
 
-        using var handler = CreateProxyHandler(mixedPort);
-        using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(8) };
-
         int? best = null;
-        foreach (var url in urls)
+        for (var attempt = 0; attempt < Math.Max(1, attempts); attempt++)
         {
-            ct.ThrowIfCancellationRequested();
-            try
+            using var handler = CreateProxyHandler(mixedPort);
+            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(10) };
+
+            foreach (var url in urls)
             {
-                var sw = Stopwatch.StartNew();
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                linked.CancelAfter(TimeSpan.FromSeconds(6));
-                using var resp = await client.GetAsync(url, linked.Token).ConfigureAwait(false);
-                sw.Stop();
-                var code = (int)resp.StatusCode;
-                if (code is 204 or 200 or 301 or 302 or 404)
+                ct.ThrowIfCancellationRequested();
+                try
                 {
-                    var ms = (int)sw.ElapsedMilliseconds;
-                    best = best is null ? ms : Math.Min(best.Value, ms);
+                    var sw = Stopwatch.StartNew();
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                    linked.CancelAfter(TimeSpan.FromSeconds(8));
+                    using var resp = await client.GetAsync(url, linked.Token).ConfigureAwait(false);
+                    sw.Stop();
+                    var code = (int)resp.StatusCode;
+                    if (code is 204 or 200 or 301 or 302 or 404)
+                    {
+                        var ms = (int)sw.ElapsedMilliseconds;
+                        best = best is null ? ms : Math.Min(best.Value, ms);
+                    }
+                }
+                catch
+                {
+                    // try next
                 }
             }
-            catch
-            {
-                // try next
-            }
+
+            if (best is not null)
+                return best;
+
+            if (attempt + 1 < attempts)
+                await Task.Delay(retryDelay.Value, ct).ConfigureAwait(false);
         }
 
         return best;

@@ -29,6 +29,12 @@
                 <MenuItem Header="AmneziaWG: импорт из б_уфера" Click="MenuImportAwgClipboard_OnClick"
                           AutomationProperties.Name="Импорт AmneziaWG из буфера обмена" />
             </MenuItem>
+            <MenuItem Header="_Маршрутизация" AutomationProperties.Name="Меню маршрутизации">
+                <MenuItem Header="Импорт профиля из _буфера обмена" Click="MenuImportRoutingProfile_OnClick"
+                          AutomationProperties.Name="Импорт профиля маршрутизации Happ из буфера обмена" />
+                <MenuItem Header="_Удалить выбранный профиль" Click="MenuDeleteRoutingProfile_OnClick"
+                          AutomationProperties.Name="Удалить выбранный DNS профиль" />
+            </MenuItem>
             <MenuItem Header="_Справка" AutomationProperties.Name="Справка">
                 <MenuItem Header="Проверить _обновления ядер" Click="MenuCheckCoreUpdates_OnClick"
                           AutomationProperties.Name="Проверить обновления ядер" />
@@ -254,6 +260,17 @@
                 <ComboBoxItem Tag="bypass-list" Content="Всё через VPN, кроме сайтов из списка" />
                 <ComboBoxItem Tag="app-proxy" Content="Только выбранные приложения через VPN (нужен TUN)" />
                 <ComboBoxItem Tag="app-bypass" Content="Всё через VPN, кроме выбранных приложений (нужен TUN)" />
+            </ComboBox>
+
+            <Label Content="DNS-профиль (Happ)"
+                   Target="{Binding ElementName=DnsProfileBox}"
+                   Margin="0,8,0,0"
+                   AutomationProperties.Name="Подпись DNS профиля Happ" />
+            <ComboBox x:Name="DnsProfileBox"
+                      MinHeight="32"
+                      SelectionChanged="DnsProfileBox_OnSelectionChanged"
+                      AutomationProperties.Name="DNS профиль Happ"
+                      AutomationProperties.HelpText="Импортируйте happ://routing/add/… из буфера обмена. FakeDNS работает с TUN.">
             </ComboBox>
 
             <Label x:Name="DomainListLabel"

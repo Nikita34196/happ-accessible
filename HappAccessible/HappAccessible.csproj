@@ -10,7 +10,7 @@
     <ApplicationTitle>Happ Accessible</ApplicationTitle>
     <Product>Happ Accessible</Product>
     <Description>Accessible VPN and proxy client for NVDA (subscriptions, AmneziaWG, System Proxy / TUN)</Description>
-    <Version>0.3.28</Version>
+    <Version>0.3.29</Version>
   </PropertyGroup>
 
   <ItemGroup>

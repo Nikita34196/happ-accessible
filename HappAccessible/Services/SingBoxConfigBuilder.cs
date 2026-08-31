@@ -15,6 +15,7 @@ public static class SingBoxConfigBuilder
     {
         routing ??= new RoutingOptions();
         engine ??= new EngineOptions();
+        var routingProfile = engine.RoutingProfile;
         var mixedPort = EngineOptions.ClampPort(engine.MixedPort);
         var tunStack = EngineOptions.NormalizeTunStack(engine.TunStack);
 
@@ -202,62 +203,24 @@ public static class SingBoxConfigBuilder
             }
         }
 
-        // UDP DNS over VLESS/Reality often stalls (~1 min) — use DoH over the proxy instead.
-        var dnsRulesList = new List<object>();
-        if (!string.IsNullOrWhiteSpace(server.Host) && !IPAddressLooksLiteral(server.Host))
+        if (routingProfile is not null)
+            ApplyHappProfileRules(routingProfile, rules, ref ruleSets, ref dnsRules, ref finalOutbound);
+
+        // UDP DNS over VLESS/Reality often stalls (~1 min) — use DoH/DoU over the proxy instead.
+        var dns = BuildDnsSection(server, engine, enableTun, dnsFinal, dnsRules, out var usesFakeDns);
+        if (usesFakeDns)
         {
-            dnsRulesList.Add(new Dictionary<string, object?>
+            rules.Add(new Dictionary<string, object?>
             {
-                ["domain"] = new[] { server.Host },
-                ["server"] = "dns-local"
+                ["ip_cidr"] = new[] { "198.18.0.0/15" },
+                ["outbound"] = "proxy"
+            });
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["ip_cidr"] = new[] { "fc00::/18" },
+                ["outbound"] = "proxy"
             });
         }
-
-        if (dnsRules is not null)
-            dnsRulesList.AddRange(dnsRules);
-
-        var dnsRemote = NormalizeDnsHost(engine.DnsRemoteServer, "1.1.1.1");
-        var dnsFallback = NormalizeDnsHost(engine.DnsRemoteFallback, "8.8.8.8");
-
-        var dns = new Dictionary<string, object?>
-        {
-            ["servers"] = new object[]
-            {
-                new Dictionary<string, object?>
-                {
-                    ["type"] = "https",
-                    ["tag"] = "dns-remote",
-                    ["server"] = dnsRemote,
-                    ["detour"] = "proxy",
-                    ["tls"] = new Dictionary<string, object?>
-                    {
-                        ["enabled"] = true,
-                        ["server_name"] = DnsTlsServerName(dnsRemote, "cloudflare-dns.com")
-                    }
-                },
-                new Dictionary<string, object?>
-                {
-                    ["type"] = "https",
-                    ["tag"] = "dns-remote-fallback",
-                    ["server"] = dnsFallback,
-                    ["detour"] = "proxy",
-                    ["tls"] = new Dictionary<string, object?>
-                    {
-                        ["enabled"] = true,
-                        ["server_name"] = DnsTlsServerName(dnsFallback, "dns.google")
-                    }
-                },
-                new Dictionary<string, object?>
-                {
-                    ["type"] = "local",
-                    ["tag"] = "dns-local"
-                }
-            },
-            ["final"] = dnsFinal,
-            ["strategy"] = NormalizeDnsStrategy(engine.DnsStrategy)
-        };
-        if (dnsRulesList.Count > 0)
-            dns["rules"] = dnsRulesList;
 
         var route = new Dictionary<string, object?>
         {
@@ -271,7 +234,9 @@ public static class SingBoxConfigBuilder
         if (routing.Mode is RoutingMode.AppProxy or RoutingMode.AppBypass)
             route["find_process"] = true;
 
-        ClearDnsCache();
+        var dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "HappAccessible", "data");
 
         var config = new Dictionary<string, object?>
         {
@@ -281,6 +246,14 @@ public static class SingBoxConfigBuilder
                 // can throttle traffic because the runner persists each line.
                 ["level"] = "warn",
                 ["timestamp"] = true
+            },
+            ["experimental"] = new Dictionary<string, object?>
+            {
+                ["cache_file"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["path"] = Path.Combine(dataDir, "cache.db")
+                }
             },
             ["dns"] = dns,
             ["inbounds"] = inbounds,
@@ -385,9 +358,258 @@ public static class SingBoxConfigBuilder
             ["type"] = "remote",
             ["format"] = "binary",
             ["url"] = url,
-            ["download_detour"] = "direct",
+            ["http_client"] = new Dictionary<string, object?> { ["detour"] = "direct" },
             ["update_interval"] = "24h"
         };
+
+    private static void ApplyHappProfileRules(
+        HappRoutingProfile profile,
+        List<object> rules,
+        ref List<object>? ruleSets,
+        ref List<object>? dnsRules,
+        ref string finalOutbound)
+    {
+        AppendRejectRules(profile.BlockSites, rules, ref ruleSets);
+        AppendRejectRules(profile.BlockIp, rules, ref ruleSets);
+        AppendDomainAndRuleSetRules(profile.DirectSites, "direct", rules, ref ruleSets, ref dnsRules, "dns-domestic");
+        AppendDomainAndRuleSetRules(profile.DirectIp, "direct", rules, ref ruleSets, ref dnsRules, "dns-domestic");
+        AppendDomainAndRuleSetRules(profile.ProxySites, "proxy", rules, ref ruleSets, ref dnsRules, "dns-remote");
+        AppendDomainAndRuleSetRules(profile.ProxyIp, "proxy", rules, ref ruleSets, ref dnsRules, "dns-remote");
+
+        if (profile.GlobalProxy)
+            finalOutbound = "proxy";
+    }
+
+    private static void AppendRejectRules(
+        IReadOnlyList<string> entries,
+        List<object> rules,
+        ref List<object>? ruleSets)
+    {
+        if (entries.Count == 0)
+            return;
+
+        var (domains, geosite, geoip) = RoutingOptions.SplitRoutingTags(entries);
+        if (domains.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["domain"] = domains.ToArray(),
+                ["action"] = "reject"
+            });
+        }
+
+        ruleSets ??= [];
+        var geositeTags = new List<string>();
+        foreach (var tag in geosite)
+        {
+            var rsTag = "geosite-" + tag.Replace(':', '-');
+            geositeTags.Add(rsTag);
+            if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))
+            {
+                ruleSets.Add(RemoteRuleSet(rsTag,
+                    $"https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-{tag}.srs"));
+            }
+        }
+
+        var geoipTags = new List<string>();
+        foreach (var tag in geoip)
+        {
+            var rsTag = "geoip-" + tag.Replace(':', '-');
+            geoipTags.Add(rsTag);
+            if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))
+            {
+                ruleSets.Add(RemoteRuleSet(rsTag,
+                    $"https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-{tag}.srs"));
+            }
+        }
+
+        if (geositeTags.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["rule_set"] = geositeTags.ToArray(),
+                ["action"] = "reject"
+            });
+        }
+
+        if (geoipTags.Count > 0)
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["rule_set"] = geoipTags.Count == 1 ? geoipTags[0] : geoipTags.ToArray(),
+                ["action"] = "reject"
+            });
+        }
+
+        if (ruleSets.Count == 0)
+            ruleSets = null;
+    }
+
+    private static Dictionary<string, object?> BuildDnsSection(
+        ServerProfile server,
+        EngineOptions engine,
+        bool enableTun,
+        string dnsFinal,
+        List<object>? routingDnsRules,
+        out bool usesFakeDns)
+    {
+        usesFakeDns = engine.FakeDns && enableTun;
+        var servers = new List<object>();
+        var rules = new List<object>();
+
+        if (!string.IsNullOrWhiteSpace(server.Host) && !IPAddressLooksLiteral(server.Host))
+        {
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["domain"] = new[] { server.Host },
+                ["server"] = "dns-local"
+            });
+        }
+
+        foreach (var (host, ip) in engine.DnsHosts)
+        {
+            if (string.IsNullOrWhiteSpace(host))
+                continue;
+            _ = ip;
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["domain"] = new[] { host.Trim() },
+                ["server"] = "dns-local"
+            });
+        }
+
+        if (routingDnsRules is not null)
+            rules.AddRange(routingDnsRules);
+
+        servers.Add(BuildDnsServer(
+            "dns-remote",
+            engine.DnsRemoteType,
+            engine.DnsRemoteServer,
+            engine.DnsRemoteDomain,
+            "proxy"));
+
+        var fallback = NormalizeDnsHost(engine.DnsRemoteFallback, "8.8.8.8");
+        if (!string.Equals(fallback, engine.DnsRemoteServer, StringComparison.OrdinalIgnoreCase))
+        {
+            servers.Add(BuildDnsServer(
+                "dns-remote-fallback",
+                "DoH",
+                fallback,
+                "",
+                "proxy"));
+        }
+
+        if (!string.IsNullOrWhiteSpace(engine.DnsDomesticServer))
+        {
+            servers.Add(BuildDnsServer(
+                "dns-domestic",
+                engine.DnsDomesticType,
+                engine.DnsDomesticServer,
+                engine.DnsDomesticDomain,
+                "direct"));
+        }
+
+        servers.Add(new Dictionary<string, object?>
+        {
+            ["type"] = "local",
+            ["tag"] = "dns-local"
+        });
+
+        if (usesFakeDns)
+        {
+            servers.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "fakeip",
+                ["tag"] = "fakeip",
+                ["inet4_range"] = "198.18.0.0/15",
+                ["inet6_range"] = "fc00::/18"
+            });
+            rules.Add(new Dictionary<string, object?>
+            {
+                ["query_type"] = new[] { "A", "AAAA" },
+                ["server"] = "fakeip"
+            });
+        }
+
+        var dns = new Dictionary<string, object?>
+        {
+            ["servers"] = servers,
+            ["final"] = usesFakeDns ? "dns-remote" : dnsFinal,
+            ["strategy"] = NormalizeDnsStrategy(engine.DnsStrategy)
+        };
+        if (usesFakeDns)
+            dns["independent_cache"] = true;
+        if (rules.Count > 0)
+            dns["rules"] = rules;
+        if (engine.DnsHosts.Count > 0)
+        {
+            dns["hosts"] = engine.DnsHosts.ToDictionary(
+                static kv => kv.Key,
+                static kv => kv.Value,
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        return dns;
+    }
+
+    private static Dictionary<string, object?> BuildDnsServer(
+        string tag,
+        string dnsType,
+        string serverHost,
+        string domainUrl,
+        string detour)
+    {
+        var (host, path, sni) = ParseDnsEndpoint(serverHost, domainUrl);
+        return dnsType.Trim().ToUpperInvariant() switch
+        {
+            "DOU" => new Dictionary<string, object?>
+            {
+                ["type"] = "udp",
+                ["tag"] = tag,
+                ["server"] = host,
+                ["detour"] = detour
+            },
+            "DOT" => new Dictionary<string, object?>
+            {
+                ["type"] = "tls",
+                ["tag"] = tag,
+                ["server"] = host,
+                ["detour"] = detour,
+                ["tls"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["server_name"] = sni ?? host
+                }
+            },
+            _ => new Dictionary<string, object?>
+            {
+                ["type"] = "https",
+                ["tag"] = tag,
+                ["server"] = host,
+                ["detour"] = detour,
+                ["path"] = path,
+                ["tls"] = new Dictionary<string, object?>
+                {
+                    ["enabled"] = true,
+                    ["server_name"] = sni ?? DnsTlsServerName(host, "cloudflare-dns.com")
+                }
+            }
+        };
+    }
+
+    private static (string Host, string Path, string? Sni) ParseDnsEndpoint(string serverHost, string domainUrl)
+    {
+        domainUrl = (domainUrl ?? "").Trim();
+        if (!string.IsNullOrEmpty(domainUrl)
+            && Uri.TryCreate(domainUrl, UriKind.Absolute, out var uri)
+            && !string.IsNullOrWhiteSpace(uri.Host))
+        {
+            var path = string.IsNullOrEmpty(uri.AbsolutePath) ? "/dns-query" : uri.AbsolutePath;
+            return (uri.Host, path, uri.Host);
+        }
+
+        return (NormalizeDnsHost(serverHost, "1.1.1.1"), "/dns-query", null);
+    }
 
     /// <summary>Fallback RU domains (gov / banks / major services) if rule-set is not ready yet.</summary>
     private static string[] GetBuiltInRussianDomains() =>
@@ -483,8 +705,10 @@ public static class SingBoxConfigBuilder
         // Vision flow is only valid on raw TCP
         if (!string.IsNullOrEmpty(flow) && type is "tcp" or "raw" or "")
             outbound["flow"] = flow;
-        // xudp over xhttp is unreliable for browser QUIC — omit there
-        if (type is not ("xhttp" or "splithttp"))
+        // Vision is TCP-only; xudp is for UDP and can interfere with first connect checks.
+        if (type is not ("xhttp" or "splithttp")
+            && !string.Equals(flow, "xtls-rprx-vision", StringComparison.OrdinalIgnoreCase)
+            && flow?.Contains("xtls", StringComparison.OrdinalIgnoreCase) != true)
             outbound["packet_encoding"] = "xudp";
 
 

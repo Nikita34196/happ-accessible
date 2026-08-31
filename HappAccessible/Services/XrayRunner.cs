@@ -206,17 +206,29 @@ public sealed class XrayRunner : IDisposable
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 
-        await ConnectivityProbe.WaitForProcessReadyAsync(_process, TimeSpan.FromSeconds(2), ct)
+        await ConnectivityProbe.WaitForProcessReadyAsync(_process, TimeSpan.FromSeconds(1), ct)
+            .ConfigureAwait(false);
+        var ready = await ConnectivityProbe.WaitForMixedPortReadyAsync(
+                _activePort,
+                _process,
+                TimeSpan.FromSeconds(6),
+                ct)
             .ConfigureAwait(false);
         if (_process.HasExited)
             throw new InvalidOperationException($"Xray сразу завершился (код {_process.ExitCode}). {RecentLog}");
+        if (!ready)
+            AppLogService.Warn("Xray запущен, но HTTP-порт пока не отвечает.");
     }
 
     public async Task<(bool Ok, string Detail)> ProbeSessionHealthAsync(CancellationToken ct = default) =>
         await ConnectivityProbe.ProbeSessionHealthAsync(_activePort, ct).ConfigureAwait(false);
 
     public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default) =>
-        await ConnectivityProbe.ProbeHttpViaProxyAsync(_activePort, ct).ConfigureAwait(false);
+        await ConnectivityProbe.ProbeHttpViaProxyAsync(
+            _activePort,
+            ct,
+            attempts: 4,
+            retryDelay: TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
     public async Task StopAsync()
     {

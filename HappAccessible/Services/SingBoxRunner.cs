@@ -246,8 +246,12 @@ public sealed class SingBoxRunner : IDisposable
         _process.BeginOutputReadLine();
         _process.BeginErrorReadLine();
 
-        // Give core a moment to bind / fail fast
-        await ConnectivityProbe.WaitForProcessReadyAsync(_process, TimeSpan.FromSeconds(2), ct)
+        // Give core time to bind mixed/TUN and finish the first Reality handshake.
+        var ready = await ConnectivityProbe.WaitForMixedPortReadyAsync(
+                _activeMixedPort,
+                _process,
+                tun ? TimeSpan.FromSeconds(10) : TimeSpan.FromSeconds(4),
+                ct)
             .ConfigureAwait(false);
         if (_process.HasExited)
         {
@@ -255,13 +259,20 @@ public sealed class SingBoxRunner : IDisposable
             throw new InvalidOperationException(
                 $"sing-box сразу завершился (код {code}). {RecentLog}");
         }
+
+        if (!ready)
+            AppLogService.Warn("sing-box запущен, но mixed-порт пока не отвечает.");
     }
 
     public async Task<(bool Ok, string Detail)> ProbeSessionHealthAsync(CancellationToken ct = default) =>
         await ConnectivityProbe.ProbeSessionHealthAsync(_activeMixedPort, ct).ConfigureAwait(false);
 
     public async Task<bool> ProbeConnectivityAsync(CancellationToken ct = default) =>
-        await ConnectivityProbe.ProbeHttpViaProxyAsync(_activeMixedPort, ct).ConfigureAwait(false);
+        await ConnectivityProbe.ProbeHttpViaProxyAsync(
+            _activeMixedPort,
+            ct,
+            attempts: 4,
+            retryDelay: TimeSpan.FromSeconds(2)).ConfigureAwait(false);
 
     public async Task StopAsync()
     {

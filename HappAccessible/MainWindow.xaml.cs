@@ -48,6 +48,7 @@ public partial class MainWindow : Window
     private bool _manualDisconnect;
     private string _activeConnectionFingerprint = "";
     private bool _settingsReconnectBusy;
+    private List<HappRoutingProfile> _routingProfiles = [];
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public static void ActivateExistingInstance()
@@ -117,6 +118,8 @@ public partial class MainWindow : Window
         if (KillSwitchCheck is not null)
             KillSwitchCheck.IsChecked = _settings.KillSwitchEnabled;
         SelectRoutingMode(_settings.RoutingMode);
+        RefreshRoutingProfileBox();
+        SelectRoutingProfile(_settings.ActiveRoutingProfileId);
         UpdateDomainListVisibility();
         UpdateSubscriptionInfo();
         _loadingUi = false;
@@ -1128,6 +1131,29 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (HappRoutingImporter.LooksLikeHappRouting(text))
+        {
+            try
+            {
+                var profile = HappRoutingImporter.Parse(text);
+                var (saved, added) = HappRoutingProfileStore.Import(profile);
+                _settings.ActiveRoutingProfileId = saved.Id;
+                RefreshRoutingProfileBox();
+                SelectRoutingProfile(saved.Id);
+                CaptureSettingsFromUi();
+                PersistSettings();
+                SetStatus(added
+                    ? $"Импортирован DNS-профиль «{saved.DisplayName}». Выберите его в списке и переподключитесь."
+                    : $"Обновлён DNS-профиль «{saved.DisplayName}».");
+            }
+            catch (Exception ex)
+            {
+                SetStatus("Ошибка импорта профиля маршрутизации: " + ex.Message);
+            }
+
+            return;
+        }
+
         if (AmneziaWgConfigStore.LooksLikeConf(text))
         {
             try
@@ -1788,6 +1814,117 @@ public partial class MainWindow : Window
         return dlg.ShowDialog() == true ? result : null;
     }
 
+    private async void MenuImportRoutingProfile_OnClick(object sender, RoutedEventArgs e)
+    {
+        if (!System.Windows.Clipboard.ContainsText())
+        {
+            SetStatus("Буфер обмена пуст. Скопируйте ссылку happ://routing/add/…");
+            return;
+        }
+
+        await ApplyImportedTextAsync(System.Windows.Clipboard.GetText(), "профиля маршрутизации");
+    }
+
+    private void MenuDeleteRoutingProfile_OnClick(object sender, RoutedEventArgs e)
+    {
+        var id = GetSelectedRoutingProfileId();
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            SetStatus("Выберите импортированный DNS-профиль для удаления.");
+            return;
+        }
+
+        var profile = _routingProfiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.Ordinal));
+        if (profile is null)
+        {
+            SetStatus("Профиль не найден.");
+            return;
+        }
+
+        HappRoutingProfileStore.Remove(id);
+        if (string.Equals(_settings.ActiveRoutingProfileId, id, StringComparison.Ordinal))
+            _settings.ActiveRoutingProfileId = null;
+        RefreshRoutingProfileBox();
+        SelectRoutingProfile(_settings.ActiveRoutingProfileId);
+        CaptureSettingsFromUi();
+        PersistSettings();
+        SetStatus($"DNS-профиль «{profile.DisplayName}» удалён.");
+    }
+
+    private void RefreshRoutingProfileBox()
+    {
+        if (DnsProfileBox is null)
+            return;
+
+        _routingProfiles = HappRoutingProfileStore.LoadAll().ToList();
+        var selected = GetSelectedRoutingProfileId();
+        _loadingUi = true;
+        DnsProfileBox.Items.Clear();
+        DnsProfileBox.Items.Add(new ComboBoxItem
+        {
+            Tag = "",
+            Content = "По умолчанию (встроенный DNS)",
+            IsSelected = string.IsNullOrWhiteSpace(selected)
+        });
+        foreach (var profile in _routingProfiles.OrderBy(p => p.DisplayName, StringComparer.CurrentCultureIgnoreCase))
+        {
+            DnsProfileBox.Items.Add(new ComboBoxItem
+            {
+                Tag = profile.Id,
+                Content = profile.DisplayName
+            });
+        }
+
+        SelectRoutingProfile(selected);
+        _loadingUi = false;
+    }
+
+    private void SelectRoutingProfile(string? id)
+    {
+        if (DnsProfileBox is null)
+            return;
+
+        foreach (var item in DnsProfileBox.Items.OfType<ComboBoxItem>())
+        {
+            if (string.Equals(item.Tag as string ?? "", id ?? "", StringComparison.Ordinal))
+            {
+                DnsProfileBox.SelectedItem = item;
+                return;
+            }
+        }
+
+        if (DnsProfileBox.Items.Count > 0)
+            DnsProfileBox.SelectedIndex = 0;
+    }
+
+    private string? GetSelectedRoutingProfileId()
+    {
+        if (DnsProfileBox?.SelectedItem is ComboBoxItem { Tag: string tag } && !string.IsNullOrWhiteSpace(tag))
+            return tag;
+        return null;
+    }
+
+    private void DnsProfileBox_OnSelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingUi)
+            return;
+
+        _settings.ActiveRoutingProfileId = GetSelectedRoutingProfileId();
+        CaptureSettingsFromUi();
+        PersistSettings();
+
+        var profile = HappRoutingProfileStore.FindById(_settings.ActiveRoutingProfileId);
+        if (profile?.FakeDns == true && TunCheck?.IsChecked != true)
+        {
+            SetStatus(
+                $"Выбран «{profile.DisplayName}». FakeDNS работает с TUN — включите TUN и переподключитесь.");
+            return;
+        }
+
+        if (profile is not null)
+            SetStatus($"Выбран DNS-профиль «{profile.DisplayName}». Переподключитесь для применения.");
+    }
+
     private async void MenuImportDomainListUrl_OnClick(object sender, RoutedEventArgs e)
     {
         var url = PromptText(
@@ -2187,11 +2324,21 @@ public partial class MainWindow : Window
             if (!ok)
             {
                 await _runner.StopAsync();
+                if (useTun && CoreSelector.LooksRealityOrVision(server.RawUri ?? ""))
+                {
+                    SetStatus(
+                        "TUN + sing-box не ответил — пробую Xray через системный прокси (без TUN)…");
+                    var xrayOutcome = await TryConnectXrayAsync(server, epoch, useProxy: true);
+                    if (xrayOutcome == ConnectOutcome.Success)
+                        _tray?.Notify("Reality/Vision: подключено через Xray без TUN (стабильнее для этого узла).");
+                    return xrayOutcome;
+                }
+
                 _connectedServer = null;
-                var failHint = BuildCoreHint(server, failed: true);
+                var failHint = BuildCoreHint(server, failed: true, tunActive: useTun);
                 SetStatus(
                     $"Сервер «{server.Name}» не отвечает через туннель (ядро: sing-box). {failHint}" +
-                    "Лог: " + TruncateStatus(_runner.RecentLog));
+                    "Лог: " + TruncateStatus(FilterLogForStatus(_runner.RecentLog)));
                 _tray?.SetTooltip("Happ Accessible — нет связи с сервером");
                 return ConnectOutcome.Failed;
             }
@@ -2680,6 +2827,7 @@ public partial class MainWindow : Window
         _settings.RoutingMode = GetSelectedRoutingModeTag();
         _settings.DomainList = DomainListBox.Text ?? "";
         _settings.AppList = AppListBox.Text ?? "";
+        _settings.ActiveRoutingProfileId = GetSelectedRoutingProfileId();
         if (ServerList.SelectedItem is ServerProfile s)
         {
             _settings.LastServerUri = s.RawUri;
@@ -2784,15 +2932,24 @@ public partial class MainWindow : Window
     private EngineOptions GetEngineOptions()
     {
         CaptureSettingsFromUi();
-        return new EngineOptions
+        var engine = new EngineOptions
         {
             MixedPort = EngineOptions.ClampPort(_settings.MixedPort),
             TunStack = EngineOptions.NormalizeTunStack(_settings.TunStack),
             DnsStrategy = _settings.DnsStrategy,
             DnsRemoteServer = _settings.DnsRemoteServer,
             DnsRemoteFallback = _settings.DnsRemoteFallback,
+            DnsRemoteType = _settings.DnsRemoteType,
+            DnsRemoteDomain = _settings.DnsRemoteDomain,
+            DnsDomesticServer = _settings.DnsDomesticServer,
+            DnsDomesticType = _settings.DnsDomesticType,
+            DnsDomesticDomain = _settings.DnsDomesticDomain,
+            FakeDns = _settings.FakeDns,
             RejectQuicUdp443 = _settings.RejectQuicUdp443
         };
+
+        var profile = HappRoutingProfileStore.FindById(_settings.ActiveRoutingProfileId);
+        return profile is null ? engine : EngineOptions.FromProfile(profile, engine);
     }
 
     private void SelectTunStack(string? stack)
@@ -2820,7 +2977,7 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Hints for Reality/Vision/xhttp when core choice matters.</summary>
-    private static string BuildCoreHint(ServerProfile server, bool failed)
+    private static string BuildCoreHint(ServerProfile server, bool failed, bool tunActive = false)
     {
         var uri = server.RawUri ?? "";
         if (CoreSelector.NeedsXrayTransport(uri))
@@ -2840,11 +2997,32 @@ public partial class MainWindow : Window
 
         if (failed)
         {
+            if (tunActive)
+            {
+                return " Узел Reality/Vision в TUN: sing-box может подниматься дольше — " +
+                       "попробуйте ещё раз, отключите TUN (ядро Xray), смените TUN stack или порт mixed. ";
+            }
+
             return " Узел Reality/Vision: попробуйте ядро Xray (Авто/Xray), другой сервер, " +
                    "или смените TUN stack / порт mixed. ";
         }
 
         return " (Reality/Vision: в Авто обычно Xray.)";
+    }
+
+    private static string FilterLogForStatus(string log)
+    {
+        if (string.IsNullOrWhiteSpace(log))
+            return "—";
+
+        var lines = log.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var important = lines.Where(l =>
+                l.Contains("ERROR", StringComparison.OrdinalIgnoreCase)
+                || l.Contains("FATAL", StringComparison.OrdinalIgnoreCase)
+                || (l.Contains("WARN", StringComparison.OrdinalIgnoreCase)
+                    && !l.Contains("download_detour", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+        return important.Count > 0 ? string.Join(" | ", important.TakeLast(3)) : lines[^1];
     }
 
     private RoutingOptions GetRoutingOptions()

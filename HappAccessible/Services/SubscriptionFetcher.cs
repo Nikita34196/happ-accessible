@@ -14,6 +14,10 @@ public sealed class SubscriptionFetcher
 {
     // Compatibility identity used by panels that recognize the official Happ client.
     private const string CompatibilityUserAgent = "Happ/3.3.6";
+    // INCY panels expect this family of User-Agent / x-client values.
+    // Bump when desktop INCY releases a version that panels start requiring
+    // (INCY-DEV/incy-platforms releases + docs.incy.cc subscription-format).
+    private const string IncyCompatibilityUserAgent = "INCY/3.7.2";
 
     private static readonly HttpClient Http = new(new HttpClientHandler
     {
@@ -36,6 +40,8 @@ public sealed class SubscriptionFetcher
         var input = NormalizeInput(urlOrContent);
         if (CryptLinkHandler.IsHappCrypt(input))
             throw new InvalidOperationException(CryptLinkHandler.ExplainLimitation());
+        if (IncyCryptCodec.IsCrypt1(input))
+            throw new InvalidOperationException("Не удалось расшифровать incy://crypt1/.");
 
         if (!IsHttpUrl(input))
             return input;
@@ -48,6 +54,7 @@ public sealed class SubscriptionFetcher
         if (settings.LastSuccessfulUserAgent is { } lastUa && IsOwnUserAgent(lastUa))
             agents.Add(lastUa.Trim());
         agents.Add(GetApplicationUserAgent());
+        agents.Add(IncyCompatibilityUserAgent);
 
         Exception? lastError = null;
         HttpStatusCode? lastCode = null;
@@ -169,6 +176,7 @@ public sealed class SubscriptionFetcher
         settings.SubscriptionProfileTitle = null;
         settings.SubscriptionSupportUrl = null;
         settings.SubscriptionProfileUpdateIntervalHours = null;
+        settings.PendingRoutingLink = null;
 
         string? raw = null;
         if (response.Headers.TryGetValues("subscription-userinfo", out var a))
@@ -198,6 +206,10 @@ public sealed class SubscriptionFetcher
         var interval = GetHeader(response, "profile-update-interval");
         if (int.TryParse(interval, out var hours) && hours > 0)
             settings.SubscriptionProfileUpdateIntervalHours = Math.Min(hours, 168);
+
+        var routing = GetHeader(response, "routing") ?? GetHeader(response, "autorouting");
+        if (!string.IsNullOrWhiteSpace(routing) && !routing.Trim().Equals("0", StringComparison.Ordinal))
+            settings.PendingRoutingLink = routing.Trim();
     }
 
     private static string? GetHeader(HttpResponseMessage response, string name)
@@ -292,12 +304,21 @@ public sealed class SubscriptionFetcher
         var s = (raw ?? "").Trim().Trim('"').Trim('\'');
         s = s.Replace("\r", "").Replace("\n", "").Trim();
 
+        if (s.StartsWith('<') && s.EndsWith('>') && s.Length > 2)
+            s = s[1..^1].Trim();
+
         if (s.StartsWith("happ://add/", StringComparison.OrdinalIgnoreCase))
         {
             var rest = s["happ://add/".Length..];
             try { rest = Uri.UnescapeDataString(rest); } catch { /* ignore */ }
             s = rest.Trim();
         }
+
+        if (IncyCryptCodec.IsCrypt1(s) && IncyCryptCodec.TryDecrypt(s, out var crypt))
+            s = crypt.Url.Trim();
+        else if (s.StartsWith("incy://add/", StringComparison.OrdinalIgnoreCase)
+                 || s.StartsWith("incy://import/", StringComparison.OrdinalIgnoreCase))
+            s = IncyDeepLink.UnwrapSubscriptionInput(s).Trim();
 
         if (s.StartsWith("sub://", StringComparison.OrdinalIgnoreCase))
         {
@@ -327,19 +348,32 @@ public sealed class SubscriptionFetcher
         req.Headers.TryAddWithoutValidation("Accept", "*/*");
         req.Headers.TryAddWithoutValidation("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8");
         req.Headers.TryAddWithoutValidation("x-hwid", settings.DeviceHwid!);
+        req.Headers.TryAddWithoutValidation("X-Device-ID", settings.DeviceHwid!);
         req.Headers.TryAddWithoutValidation("x-device-os", "Windows");
         req.Headers.TryAddWithoutValidation("x-ver-os", Environment.OSVersion.Version.ToString());
         req.Headers.TryAddWithoutValidation("x-device-model", "PC");
-        req.Headers.TryAddWithoutValidation("x-app-version", "3.3.6");
+        if (userAgent.StartsWith("INCY/", StringComparison.OrdinalIgnoreCase))
+        {
+            req.Headers.TryAddWithoutValidation("x-client", "INCY");
+            req.Headers.TryAddWithoutValidation("x-app-version", userAgent["INCY/".Length..].Trim());
+        }
+        else
+            req.Headers.TryAddWithoutValidation("x-app-version", "3.3.6");
     }
 
     private static string GetApplicationUserAgent() =>
         CompatibilityUserAgent;
 
-    private static bool IsOwnUserAgent(string? userAgent) =>
-        !string.IsNullOrWhiteSpace(userAgent)
-        && userAgent.Trim().StartsWith("Happ/", StringComparison.OrdinalIgnoreCase)
-        && !userAgent.Trim().StartsWith("HappAccessible/", StringComparison.OrdinalIgnoreCase);
+    private static bool IsOwnUserAgent(string? userAgent)
+    {
+        if (string.IsNullOrWhiteSpace(userAgent))
+            return false;
+        var ua = userAgent.Trim();
+        if (ua.StartsWith("HappAccessible/", StringComparison.OrdinalIgnoreCase))
+            return false;
+        return ua.StartsWith("Happ/", StringComparison.OrdinalIgnoreCase)
+               || ua.StartsWith("INCY/", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void EnsureHwid(AppSettings settings) =>
         DeviceHwidService.EnsureHwid(settings);

@@ -96,6 +96,9 @@ public sealed class AppSettings
     public string? SubscriptionSupportUrl { get; set; }
     /// <summary>Provider's requested refresh interval in hours.</summary>
     public int? SubscriptionProfileUpdateIntervalHours { get; set; }
+    /// <summary>Routing header from the last subscription response; not persisted.</summary>
+    [JsonIgnore]
+    public string? PendingRoutingLink { get; set; }
 
     private static string SettingsPath =>
         Path.Combine(

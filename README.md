@@ -2,9 +2,9 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.29)
+## Возможности (0.3.35)
 
-- Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**
+- Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**, ссылки **INCY** (`incy://crypt1/`, `incy://add/`, `incy://import/`)
 - **AmneziaWG / WireGuard** — импорт `.conf`
 - **Dual-core:** [sing-box-lx](https://github.com/Leadaxe/sing-box-lx) (TUN, маршруты, **xhttp**, hy2/WG) и Xray (Reality/Vision в режиме Авто)
 - Одна кнопка **Подключить / Отключить**, пинг и **диагностика** выбранного сервера (TCP, туннель, DNS)
@@ -17,7 +17,7 @@
 - Секреты подписки/Remnawave в DPAPI; стабильный HWID для панелей
 - Сохранение последнего рабочего списка серверов при ошибке подписки
 - Один экземпляр приложения (повторный запуск активирует окно)
-- **DNS-профили Happ** — импорт `happ://routing/add/…` (DoU/DoH, FakeDNS, DnsHosts BlancVPN)
+- **DNS-профили Happ / INCY** — импорт `happ://routing/add/…` и `incy://routing/add/…` (DoU/DoH, FakeDNS, DnsHosts)
 - Транзакционное обновление ядер sing-box/Xray (backup + откат)
 - Информация о подписке: трафик, срок, время обновления
 - Переименование серверов (F2), сохраняется локально
@@ -31,6 +31,33 @@
 
 Расшифровка не поддерживается (ключ только в официальном Happ).  
 Варианты: открытая подписка, вставка расшифрованного списка, или [запрос a11y](https://issues.happ.su/).
+
+## INCY (`incy://…`)
+
+`incy://crypt1/…` расшифровывается локально по [открытому пакету](https://github.com/INCY-DEV/incy-link-encoder) и сохраняется как обычный URL подписки. Также принимаются `incy://add/`, `incy://import/` и профили `incy://routing/…`. Ссылки `incy://connect` / `disconnect` не управляют туннелем — используйте кнопки этого клиента.
+
+Это не официальный INCY: нет Send to TV, Premium-панели и Lite Mode. Ядра Xray/sing-box у нас свои, из INCY ничего не копируется. Запрос доступности самого INCY на Windows: [feedback.incy.cc](https://feedback.incy.cc).
+
+### Если обновился INCY
+
+В клиенте нет «модулей INCY» в виде dll/ядра. Подтягивать нужно только формат ссылок и заголовки. Источники правды:
+
+| Что сломалось | Куда смотреть | Что править |
+|---|---|---|
+| `incy://crypt1/` больше не открывается, в ссылках появился `crypt2/` | [incy-link-encoder](https://github.com/INCY-DEV/incy-link-encoder) (`src/core.ts`, `assets/*.bin`, тест `go/incylink_test.go`) | `IncyCryptCodec.cs`: соль (`incy`+`deep`+`crypt1`+`v2026.06`), срезы keymat (offset 1024 и 2048), `KeyFingerprint`. **crypt1 оставить**, рядом добавить схему crypt2 |
+| Панель пишет «App not supported» / пустая подписка | [Releases](https://github.com/INCY-DEV/incy-platforms/releases) и [заголовки клиента](https://docs.incy.cc/en/subscription-format/) | `SubscriptionFetcher.cs`: константа `IncyCompatibilityUserAgent` (`INCY/3.7.2`) |
+| Новая ссылка (`incy://что-то/`) | [Deep Links](https://docs.incy.cc/en/deep-links/) | `IncyDeepLink.cs` |
+| Профиль маршрутизации не импортируется | [Routing](https://docs.incy.cc/routing/) | `HappRoutingImporter` в `HappRoutingProfileStore.cs` |
+| Нет трафика/имени/роутинга из подписки | [HTTP-заголовки](https://docs.incy.cc/en/subscription-format/) | `SubscriptionFetcher.ApplyUserInfo` |
+
+Проверка crypt после смены ключа:
+
+1. Взять `KEY_FINGERPRINT` и pinned vector из encoder.
+2. Срезы 32 байт из `incy_assets_a.bin` (offset 1024) и `incy_assets_b.bin` (offset 2048).
+3. `K1 = SHA256("incy" + "deep" + "cryptN" + "vYYYY.MM" + sliceA + sliceB)`, отпечаток = `SHA256(K1)` в hex.
+4. Debug-сборка при первом обращении к codec проверяет pinned vector; если вектор не сходится — тип не загрузится.
+
+User-Agent менять только если панели INCY начинают отклонять старый. Удачный UA запоминается (`LastSuccessfulUserAgent`), поэтому достаточно **добавить** новый в список, не выкидывая `Happ/3.3.6`.
 
 ## Скачать
 
@@ -56,11 +83,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.29` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.35` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.29
-git push origin v0.3.29
+git tag v0.3.35
+git push origin v0.3.35
 ```
 
 ## Клавиши

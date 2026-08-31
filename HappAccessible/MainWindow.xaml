@@ -31,7 +31,7 @@
             </MenuItem>
             <MenuItem Header="_Маршрутизация" AutomationProperties.Name="Меню маршрутизации">
                 <MenuItem Header="Импорт профиля из _буфера обмена" Click="MenuImportRoutingProfile_OnClick"
-                          AutomationProperties.Name="Импорт профиля маршрутизации Happ из буфера обмена" />
+                          AutomationProperties.Name="Импорт профиля маршрутизации Happ или INCY из буфера обмена" />
                 <MenuItem Header="_Удалить выбранный профиль" Click="MenuDeleteRoutingProfile_OnClick"
                           AutomationProperties.Name="Удалить выбранный DNS профиль" />
             </MenuItem>
@@ -262,15 +262,15 @@
                 <ComboBoxItem Tag="app-bypass" Content="Всё через VPN, кроме выбранных приложений (нужен TUN)" />
             </ComboBox>
 
-            <Label Content="DNS-профиль (Happ)"
+            <Label Content="DNS-профиль (Happ / INCY)"
                    Target="{Binding ElementName=DnsProfileBox}"
                    Margin="0,8,0,0"
-                   AutomationProperties.Name="Подпись DNS профиля Happ" />
+                   AutomationProperties.Name="Подпись DNS профиля Happ или INCY" />
             <ComboBox x:Name="DnsProfileBox"
                       MinHeight="32"
                       SelectionChanged="DnsProfileBox_OnSelectionChanged"
-                      AutomationProperties.Name="DNS профиль Happ"
-                      AutomationProperties.HelpText="Импортируйте happ://routing/add/… из буфера обмена. FakeDNS работает с TUN.">
+                      AutomationProperties.Name="DNS профиль Happ или INCY"
+                      AutomationProperties.HelpText="Импортируйте happ://routing/add/… или incy://routing/add/… из буфера обмена. FakeDNS работает с TUN.">
             </ComboBox>
 
             <Label x:Name="DomainListLabel"

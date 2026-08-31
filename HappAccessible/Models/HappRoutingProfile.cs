@@ -2,7 +2,7 @@ using System.Text.Json.Serialization;
 
 namespace HappAccessible.Models;
 
-/// <summary>Happ-compatible routing/DNS profile (happ://routing/add/…).</summary>
+/// <summary>Happ/INCY-compatible routing/DNS profile (happ://routing/add/…, incy://routing/add/…).</summary>
 public sealed class HappRoutingProfile
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");

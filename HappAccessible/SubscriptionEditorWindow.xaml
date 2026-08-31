@@ -23,7 +23,7 @@
         </StackPanel>
 
         <StackPanel>
-            <Label Content="Ссылка подписки, список серверов или текст AmneziaWG .conf"
+            <Label Content="Ссылка подписки, incy://, список серверов или текст AmneziaWG .conf"
                    Target="{Binding ElementName=SubscriptionBox}"
                    AutomationProperties.Name="Подпись поля подписки" />
             <TextBox x:Name="SubscriptionBox"
@@ -32,7 +32,7 @@
                      AcceptsReturn="True"
                      VerticalScrollBarVisibility="Auto"
                      AutomationProperties.Name="Поле подписки"
-                     AutomationProperties.HelpText="Вставьте https-ссылку, список vless/… или текст AmneziaWG .conf" />
+                     AutomationProperties.HelpText="Вставьте https-ссылку, incy://crypt1/…, список vless/… или текст AmneziaWG .conf" />
         </StackPanel>
     </DockPanel>
 </Window>

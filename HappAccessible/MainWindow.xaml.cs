@@ -49,6 +49,7 @@ public partial class MainWindow : Window
     private string _activeConnectionFingerprint = "";
     private bool _settingsReconnectBusy;
     private List<HappRoutingProfile> _routingProfiles = [];
+    private string? _importedProviderName;
     private enum ConnectOutcome { Success, Failed, Busy, Cancelled }
 
     public static void ActivateExistingInstance()
@@ -1181,20 +1182,42 @@ public partial class MainWindow : Window
             return;
         }
 
-        if (HappRoutingImporter.LooksLikeHappRouting(text))
+        try
+        {
+            if (IncyDeepLink.TryParse(text, out var incy))
+            {
+                switch (incy.Kind)
+                {
+                    case IncyLinkKind.VpnControl:
+                        SetStatus(IncyDeepLink.DescribeVpnControl(incy.ControlAction));
+                        return;
+                    case IncyLinkKind.RoutingOff:
+                        await ApplyRoutingOffAsync();
+                        return;
+                    case IncyLinkKind.RoutingProfile:
+                        await ImportRoutingPayloadAsync(incy.Payload, activate: true);
+                        return;
+                    case IncyLinkKind.Crypt1:
+                    case IncyLinkKind.Subscription:
+                        if (!string.IsNullOrWhiteSpace(incy.ProviderName))
+                            _importedProviderName = incy.ProviderName;
+                        await ApplyImportedTextAsync(incy.Payload, sourceLabel);
+                        return;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SetStatus("Ошибка ссылки INCY: " + ex.Message);
+            return;
+        }
+
+        if (HappRoutingImporter.LooksLikeRoutingLink(text)
+            || HappRoutingImporter.LooksLikeRoutingJson(text))
         {
             try
             {
-                var profile = HappRoutingImporter.Parse(text);
-                var (saved, added) = HappRoutingProfileStore.Import(profile);
-                _settings.ActiveRoutingProfileId = saved.Id;
-                RefreshRoutingProfileBox();
-                SelectRoutingProfile(saved.Id);
-                CaptureSettingsFromUi();
-                PersistSettings();
-                SetStatus(added
-                    ? $"Импортирован DNS-профиль «{saved.DisplayName}». Выберите его в списке и переподключитесь."
-                    : $"Обновлён DNS-профиль «{saved.DisplayName}».");
+                await ImportRoutingPayloadAsync(text, activate: true);
             }
             catch (Exception ex)
             {
@@ -1294,6 +1317,11 @@ public partial class MainWindow : Window
                 SetStatus(CryptLinkHandler.ExplainLimitation());
                 return;
             }
+            if (IncyCryptCodec.IsCrypt1(input))
+            {
+                SetStatus("Не удалось расшифровать incy://crypt1/. Проверьте ссылку или вставьте открытый URL подписки.");
+                return;
+            }
 
             string body;
             var fromCache = false;
@@ -1332,6 +1360,13 @@ public partial class MainWindow : Window
                 }
             }
 
+            var routingNotes = await ApplyEmbeddedRoutingAsync(body);
+            var (cleanBody, _, bodyTitle) = IncyDeepLink.SplitSubscriptionBody(body);
+            if (!string.IsNullOrWhiteSpace(bodyTitle)
+                && string.IsNullOrWhiteSpace(_settings.SubscriptionProfileTitle))
+                _settings.SubscriptionProfileTitle = bodyTitle;
+            body = cleanBody;
+
             var parsed = SubscriptionParser.Parse(body);
             if (parsed.Count == 0)
             {
@@ -1367,6 +1402,10 @@ public partial class MainWindow : Window
             SubscriptionSnapshotStore.Save(input, _servers.Where(s => s.Protocol != "amneziawg"));
             _settings.SubscriptionInput = input;
             PersistSettings();
+            if (string.IsNullOrWhiteSpace(_settings.SubscriptionProfileTitle)
+                && !string.IsNullOrWhiteSpace(_importedProviderName))
+                _settings.SubscriptionProfileTitle = _importedProviderName;
+            _importedProviderName = null;
             UpdateSubscriptionInfo();
 
             if (_servers.Count == 0)
@@ -1382,13 +1421,15 @@ public partial class MainWindow : Window
             if (announce)
             {
                 ServerList.Focus();
+                var extra = string.IsNullOrEmpty(routingNotes) ? "" : " " + routingNotes;
                 SetStatus(fromCache
-                    ? $"Из кэша: {_servers.Count} (обход БС: {wl}, AWG: {awg})."
-                    : $"Загружено: {_servers.Count} (обход БС: {wl}, AmneziaWG: {awg}).");
+                    ? $"Из кэша: {_servers.Count} (обход БС: {wl}, AWG: {awg}).{extra}"
+                    : $"Загружено: {_servers.Count} (обход БС: {wl}, AmneziaWG: {awg}).{extra}");
             }
             else if (!quiet)
             {
-                SetStatus($"Подписка обновлена: {_servers.Count} (обход БС: {wl}, AWG: {awg}).");
+                var extra = string.IsNullOrEmpty(routingNotes) ? "" : " " + routingNotes;
+                SetStatus($"Подписка обновлена: {_servers.Count} (обход БС: {wl}, AWG: {awg}).{extra}");
             }
         }
         catch (Exception ex)
@@ -1868,11 +1909,101 @@ public partial class MainWindow : Window
     {
         if (!System.Windows.Clipboard.ContainsText())
         {
-            SetStatus("Буфер обмена пуст. Скопируйте ссылку happ://routing/add/…");
+            SetStatus("Буфер обмена пуст. Скопируйте happ://routing/add/… или incy://routing/add/…");
             return;
         }
 
         await ApplyImportedTextAsync(System.Windows.Clipboard.GetText(), "профиля маршрутизации");
+    }
+
+    private async Task ApplyRoutingOffAsync()
+    {
+        _settings.ActiveRoutingProfileId = null;
+        RefreshRoutingProfileBox();
+        SelectRoutingProfile(null);
+        CaptureSettingsFromUi();
+        PersistSettings();
+        SetStatus("Маршрутизация INCY отключена. Используется встроенный DNS. Переподключитесь, чтобы применить.");
+        await Task.CompletedTask;
+    }
+
+    private async Task ImportRoutingPayloadAsync(string payload, bool activate)
+    {
+        payload = await IncyDeepLink.ResolveRoutingPayloadAsync(payload);
+        var profile = HappRoutingImporter.Parse(payload);
+        var (saved, added) = HappRoutingProfileStore.Import(profile);
+        if (activate)
+            _settings.ActiveRoutingProfileId = saved.Id;
+        RefreshRoutingProfileBox();
+        SelectRoutingProfile(_settings.ActiveRoutingProfileId);
+        CaptureSettingsFromUi();
+        PersistSettings();
+        SetStatus(added
+            ? $"Импортирован DNS-профиль «{saved.DisplayName}». Переподключитесь, чтобы применить."
+            : $"Обновлён DNS-профиль «{saved.DisplayName}».");
+    }
+
+    private async Task<string> ApplyEmbeddedRoutingAsync(string body)
+    {
+        var notes = new List<string>();
+        var pending = _settings.PendingRoutingLink;
+        _settings.PendingRoutingLink = null;
+        var (_, bodyLinks, _) = IncyDeepLink.SplitSubscriptionBody(body);
+        var links = new List<string>();
+        if (!string.IsNullOrWhiteSpace(pending))
+            links.Add(pending);
+        links.AddRange(bodyLinks);
+
+        foreach (var raw in links.Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                if (raw.Trim().Equals("off", StringComparison.OrdinalIgnoreCase)
+                    || raw.Contains("://routing/off", StringComparison.OrdinalIgnoreCase))
+                {
+                    await ApplyRoutingOffAsync();
+                    notes.Add("Маршрутизация отключена провайдером.");
+                    continue;
+                }
+
+                if (IncyDeepLink.TryParse(raw.StartsWith("://", StringComparison.Ordinal) ? "incy" + raw : raw, out var incy)
+                    && incy.Kind == IncyLinkKind.RoutingOff)
+                {
+                    await ApplyRoutingOffAsync();
+                    notes.Add("Маршрутизация отключена провайдером.");
+                    continue;
+                }
+
+                if (incy is { Kind: IncyLinkKind.RoutingProfile })
+                {
+                    await ImportRoutingPayloadAsync(incy.Payload, incy.ActivateRouting);
+                    notes.Add("Импортирован профиль маршрутизации INCY.");
+                    continue;
+                }
+
+                if (HappRoutingImporter.LooksLikeRoutingLink(raw)
+                    || HappRoutingImporter.LooksLikeRoutingJson(raw)
+                    || raw.StartsWith("://", StringComparison.Ordinal))
+                {
+                    var payload = raw.StartsWith("://", StringComparison.Ordinal) ? "incy" + raw : raw;
+                    if (IncyDeepLink.TryParse(payload, out var parsed)
+                        && parsed.Kind == IncyLinkKind.RoutingProfile)
+                    {
+                        await ImportRoutingPayloadAsync(parsed.Payload, parsed.ActivateRouting);
+                    }
+                    else
+                        await ImportRoutingPayloadAsync(payload, activate: true);
+                    notes.Add("Импортирован профиль маршрутизации.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogService.Error("INCY routing import failed", ex);
+                notes.Add("Профиль маршрутизации не импортирован: " + ex.Message);
+            }
+        }
+
+        return string.Join(" ", notes);
     }
 
     private void MenuDeleteRoutingProfile_OnClick(object sender, RoutedEventArgs e)

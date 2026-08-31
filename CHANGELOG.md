@@ -1,5 +1,12 @@
 # Что нового
 
+## 0.3.35
+
+- Импорт ссылок INCY: `incy://crypt1/…` (открытый MIT-ключ), `incy://add/`, `incy://import/`, профили `incy://routing/…`.
+- При загрузке подписки подхватываются routing-строки в теле и заголовки `routing` / `autorouting`.
+- Для панелей INCY добавлен User-Agent `INCY/3.7.2` и заголовок `x-client`.
+- `happ://crypt…` по-прежнему не расшифровывается.
+
 ## 0.3.34
 
 - Исправлен запуск sing-box с DNS-профилем Happ (BlancVPN и др.): `geoip:private` больше не загружает несуществующий `geoip-private.srs` — используется встроенное правило `ip_is_private`.

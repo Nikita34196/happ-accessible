@@ -1,5 +1,9 @@
 # Что нового
 
+## 0.3.33
+
+- Исправлена загрузка rule-set (geoip/geosite) в sing-box 1.14: убран `http_client.detour: direct`.
+
 ## 0.3.32
 
 - Исправлен запуск sing-box 1.14 с DNS-профилем: убран недопустимый `detour: direct` у DNS-серверов.

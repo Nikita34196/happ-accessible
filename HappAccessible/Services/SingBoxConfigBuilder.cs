@@ -584,40 +584,46 @@ public static class SingBoxConfigBuilder
         string detour)
     {
         var (host, path, sni) = ParseDnsEndpoint(serverHost, domainUrl);
+        var useDetour = !string.Equals(detour, "direct", StringComparison.OrdinalIgnoreCase);
+
+        Dictionary<string, object?> WithDetour(Dictionary<string, object?> server)
+        {
+            if (useDetour && !string.IsNullOrWhiteSpace(detour))
+                server["detour"] = detour;
+            return server;
+        }
+
         return dnsType.Trim().ToUpperInvariant() switch
         {
-            "DOU" => new Dictionary<string, object?>
+            "DOU" => WithDetour(new Dictionary<string, object?>
             {
                 ["type"] = "udp",
                 ["tag"] = tag,
-                ["server"] = host,
-                ["detour"] = detour
-            },
-            "DOT" => new Dictionary<string, object?>
+                ["server"] = host
+            }),
+            "DOT" => WithDetour(new Dictionary<string, object?>
             {
                 ["type"] = "tls",
                 ["tag"] = tag,
                 ["server"] = host,
-                ["detour"] = detour,
                 ["tls"] = new Dictionary<string, object?>
                 {
                     ["enabled"] = true,
                     ["server_name"] = sni ?? host
                 }
-            },
-            _ => new Dictionary<string, object?>
+            }),
+            _ => WithDetour(new Dictionary<string, object?>
             {
                 ["type"] = "https",
                 ["tag"] = tag,
                 ["server"] = host,
-                ["detour"] = detour,
                 ["path"] = path,
                 ["tls"] = new Dictionary<string, object?>
                 {
                     ["enabled"] = true,
                     ["server_name"] = sni ?? DnsTlsServerName(host, "cloudflare-dns.com")
                 }
-            }
+            })
         };
     }
 

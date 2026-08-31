@@ -13,12 +13,8 @@ public sealed class SingBoxRunner : IDisposable
 {
     private static readonly HttpClient Http = CreateHttp();
 
-    private static HttpClient CreateHttp()
-    {
-        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(5) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + AppUpdateService.GetCurrentVersion());
-        return http;
-    }
+    private static HttpClient CreateHttp() =>
+        DirectHttp.Create(TimeSpan.FromMinutes(5), "HappAccessible/" + AppUpdateService.GetCurrentVersion());
 
     private Process? _process;
     private readonly StringBuilder _log = new();

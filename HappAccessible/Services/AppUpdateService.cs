@@ -28,8 +28,7 @@ public sealed class AppUpdateService
 
     private static HttpClient CreateHttp()
     {
-        var http = new HttpClient { Timeout = TimeSpan.FromMinutes(8) };
-        http.DefaultRequestHeaders.UserAgent.ParseAdd("HappAccessible/" + GetCurrentVersion());
+        var http = DirectHttp.Create(TimeSpan.FromMinutes(8), "HappAccessible/" + GetCurrentVersion());
         http.DefaultRequestHeaders.Accept.ParseAdd("application/vnd.github+json");
         http.DefaultRequestHeaders.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
         {

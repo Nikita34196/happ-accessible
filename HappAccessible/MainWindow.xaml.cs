@@ -264,7 +264,7 @@ public partial class MainWindow : Window
         try
         {
             SetStatus("Проверка обновления приложения…");
-            var info = await _appUpdates.CheckAsync();
+            var info = await CheckAppUpdateWithVpnFallbackAsync();
             _settings.LastAppCheckUtc = DateTime.UtcNow;
             PersistSettings();
             if (!info.UpdateAvailable)
@@ -279,7 +279,25 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            SetStatus("Обновление приложения: " + ex.Message);
+            var hint = DirectHttp.IsSslOrTransportFailure(ex)
+                ? " Отключите VPN или скачайте с GitHub Releases вручную."
+                : "";
+            SetStatus("Обновление приложения: " + ex.Message + hint);
+        }
+    }
+
+    private async Task<AppReleaseInfo> CheckAppUpdateWithVpnFallbackAsync()
+    {
+        try
+        {
+            return await _appUpdates.CheckAsync();
+        }
+        catch (Exception ex) when (IsVpnConnected && DirectHttp.IsSslOrTransportFailure(ex))
+        {
+            SetStatus("GitHub недоступен через VPN — отключаю туннель для проверки обновления…");
+            await DisconnectAsync(manual: false);
+            await Task.Delay(1500);
+            return await _appUpdates.CheckAsync();
         }
     }
 
@@ -355,21 +373,53 @@ public partial class MainWindow : Window
         }
 
         var progress = new Progress<string>(msg => SetStatus(msg, important: !silent));
+        var disconnectedForUpdate = false;
         try
         {
-            await _appUpdates.ApplyAsync(info, silent, progress);
-            var msg = $"Обновление до {info.LatestVersion}. Приложение перезапустится.";
-            SetStatus(msg, important: !silent);
-            _tray?.Notify(msg);
-            _exitRequested = true;
-            Cleanup(persistFromUi: false);
-            System.Windows.Application.Current.Shutdown();
+            await ApplyAppUpdateCoreAsync(info, silent, progress);
+        }
+        catch (Exception ex) when (!disconnectedForUpdate
+                                   && IsVpnConnected
+                                   && DirectHttp.IsSslOrTransportFailure(ex))
+        {
+            SetStatus("Обновление через VPN не удалось — отключаю туннель и пробую снова…");
+            await DisconnectAsync(manual: false);
+            disconnectedForUpdate = true;
+            await Task.Delay(1500);
+            await ApplyAppUpdateCoreAsync(info, silent, progress);
         }
         catch (Exception ex)
         {
-            SetStatus("Обновление: " + ex.Message);
-            if (!silent)
-                System.Windows.MessageBox.Show(this, ex.Message, "Обновление", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ReportAppUpdateFailure(ex, silent);
+        }
+    }
+
+    private async Task ApplyAppUpdateCoreAsync(
+        AppReleaseInfo info, bool silent, IProgress<string> progress)
+    {
+        await _appUpdates.ApplyAsync(info, silent, progress);
+        var msg = $"Обновление до {info.LatestVersion}. Приложение перезапустится.";
+        SetStatus(msg, important: !silent);
+        _tray?.Notify(msg);
+        _exitRequested = true;
+        Cleanup(persistFromUi: false);
+        System.Windows.Application.Current.Shutdown();
+    }
+
+    private void ReportAppUpdateFailure(Exception ex, bool silent)
+    {
+        var hint = DirectHttp.IsSslOrTransportFailure(ex)
+            ? " Отключите VPN и повторите, или скачайте установщик вручную с GitHub Releases."
+            : "";
+        SetStatus("Обновление: " + ex.Message + hint);
+        if (!silent)
+        {
+            System.Windows.MessageBox.Show(
+                this,
+                ex.Message + hint,
+                "Обновление",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
         }
     }
 

@@ -84,6 +84,12 @@ public static class SingBoxConfigBuilder
             ["outbound"] = "direct"
         });
 
+        rules.Add(new Dictionary<string, object?>
+        {
+            ["domain_suffix"] = DirectHttp.GitHubDomainSuffixes,
+            ["outbound"] = "direct"
+        });
+
         // Never send traffic to the VPN node itself through the tunnel (TUN loop)
         if (!string.IsNullOrWhiteSpace(server.Host))
         {
@@ -465,6 +471,12 @@ public static class SingBoxConfigBuilder
                 ["server"] = "dns-local"
             });
         }
+
+        rules.Add(new Dictionary<string, object?>
+        {
+            ["domain_suffix"] = DirectHttp.GitHubDomainSuffixes,
+            ["server"] = "dns-local"
+        });
 
         foreach (var (host, ip) in engine.DnsHosts)
         {

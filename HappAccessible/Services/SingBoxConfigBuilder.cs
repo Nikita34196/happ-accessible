@@ -324,6 +324,9 @@ public static class SingBoxConfigBuilder
         var geoipTags = new List<string>();
         foreach (var tag in geoip)
         {
+            if (IsBuiltInGeoIpTag(tag))
+                continue;
+
             var rsTag = "geoip-" + tag.Replace(':', '-');
             geoipTags.Add(rsTag);
             if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))
@@ -363,6 +366,10 @@ public static class SingBoxConfigBuilder
         if (ruleSets.Count == 0)
             ruleSets = null;
     }
+
+    /// sing-geoip has no geoip-private.srs; private ranges are matched by ip_is_private in route rules.
+    private static bool IsBuiltInGeoIpTag(string tag) =>
+        string.Equals(tag, "private", StringComparison.OrdinalIgnoreCase);
 
     private static Dictionary<string, object?> RemoteRuleSet(string tag, string url) =>
         new()
@@ -426,6 +433,9 @@ public static class SingBoxConfigBuilder
         var geoipTags = new List<string>();
         foreach (var tag in geoip)
         {
+            if (IsBuiltInGeoIpTag(tag))
+                continue;
+
             var rsTag = "geoip-" + tag.Replace(':', '-');
             geoipTags.Add(rsTag);
             if (ruleSets.All(r => r is not Dictionary<string, object?> d || !Equals(d.GetValueOrDefault("tag"), rsTag)))

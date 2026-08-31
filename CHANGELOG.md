@@ -1,5 +1,9 @@
 # Что нового
 
+## 0.3.34
+
+- Исправлен запуск sing-box с DNS-профилем Happ (BlancVPN и др.): `geoip:private` больше не загружает несуществующий `geoip-private.srs` — используется встроенное правило `ip_is_private`.
+
 ## 0.3.33
 
 - Исправлена загрузка rule-set (geoip/geosite) в sing-box 1.14: убран `http_client.detour: direct`.

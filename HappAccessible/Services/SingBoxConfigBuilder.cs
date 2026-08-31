@@ -478,18 +478,6 @@ public static class SingBoxConfigBuilder
             ["server"] = "dns-local"
         });
 
-        foreach (var (host, ip) in engine.DnsHosts)
-        {
-            if (string.IsNullOrWhiteSpace(host))
-                continue;
-            _ = ip;
-            rules.Add(new Dictionary<string, object?>
-            {
-                ["domain"] = new[] { host.Trim() },
-                ["server"] = "dns-local"
-            });
-        }
-
         if (routingDnsRules is not null)
             rules.AddRange(routingDnsRules);
 
@@ -527,6 +515,24 @@ public static class SingBoxConfigBuilder
             ["tag"] = "dns-local"
         });
 
+        var predefinedHosts = BuildPredefinedHosts(engine.DnsHosts);
+        if (predefinedHosts.Count > 0)
+        {
+            servers.Add(new Dictionary<string, object?>
+            {
+                ["type"] = "hosts",
+                ["tag"] = "dns-hosts",
+                ["path"] = Array.Empty<string>(),
+                ["predefined"] = predefinedHosts
+            });
+            rules.Insert(0, new Dictionary<string, object?>
+            {
+                ["preferred_by"] = "dns-hosts",
+                ["action"] = "route",
+                ["server"] = "dns-hosts"
+            });
+        }
+
         if (usesFakeDns)
         {
             servers.Add(new Dictionary<string, object?>
@@ -553,15 +559,21 @@ public static class SingBoxConfigBuilder
             dns["independent_cache"] = true;
         if (rules.Count > 0)
             dns["rules"] = rules;
-        if (engine.DnsHosts.Count > 0)
-        {
-            dns["hosts"] = engine.DnsHosts.ToDictionary(
-                static kv => kv.Key,
-                static kv => kv.Value,
-                StringComparer.OrdinalIgnoreCase);
-        }
 
         return dns;
+    }
+
+    private static Dictionary<string, object?> BuildPredefinedHosts(IReadOnlyDictionary<string, string> dnsHosts)
+    {
+        var predefined = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (host, ip) in dnsHosts)
+        {
+            if (string.IsNullOrWhiteSpace(host) || string.IsNullOrWhiteSpace(ip))
+                continue;
+            predefined[host.Trim()] = ip.Trim();
+        }
+
+        return predefined;
     }
 
     private static Dictionary<string, object?> BuildDnsServer(

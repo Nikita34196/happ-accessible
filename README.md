@@ -2,7 +2,7 @@
 
 Доступный Windows-клиент VPN/прокси для **NVDA** (.NET 8 WPF + трей).
 
-## Возможности (0.3.35)
+## Возможности (0.3.36)
 
 - Подписки / импорт: `vless`, `vmess`, `trojan`, `ss`, `hysteria` / `hysteria2`, `wireguard`, Clash YAML, **Xray/sing-box JSON**, ссылки **INCY** (`incy://crypt1/`, `incy://add/`, `incy://import/`)
 - **AmneziaWG / WireGuard** — импорт `.conf`
@@ -24,6 +24,7 @@
 - Меню трея: серверы, проверка соединения, пинг
 - Маршруты: списки доменов, `geosite:` / `geoip:` (rule-set с GitHub), режимы по приложениям
 - **Автообновление ядер** (sing-box-lx, Xray, AmneziaWG) и **приложения** через GitHub Releases
+- **Совместимость INCY** — Справка → Обновить совместимость INCY (User-Agent и ключи crypt с GitHub)
 - Кнопка **Логи** / Справка → Открыть логи — `app.log` с ошибками
 - Системный прокси и TUN, автопереключение на обход белых списков
 
@@ -35,6 +36,8 @@
 ## INCY (`incy://…`)
 
 `incy://crypt1/…` расшифровывается локально по [открытому пакету](https://github.com/INCY-DEV/incy-link-encoder) и сохраняется как обычный URL подписки. Также принимаются `incy://add/`, `incy://import/` и профили `incy://routing/…`. Ссылки `incy://connect` / `disconnect` не управляют туннелем — используйте кнопки этого клиента.
+
+Ключи и User-Agent подтягиваются с GitHub (**Справка → Обновить совместимость INCY**), встроенный crypt1 не удаляется.
 
 Это не официальный INCY: нет Send to TV, Premium-панели и Lite Mode. Ядра Xray/sing-box у нас свои, из INCY ничего не копируется. Запрос доступности самого INCY на Windows: [feedback.incy.cc](https://feedback.incy.cc).
 
@@ -83,11 +86,11 @@ powershell -ExecutionPolicy Bypass -File scripts\build-release-artifacts.ps1
 | Workflow | Когда | Что делает |
 |---|---|---|
 | **Build** | push / PR в `main` | сборка + артефакт win-x64 |
-| **Release** | тег `v0.3.35` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
+| **Release** | тег `v0.3.36` (или ручной запуск) | portable zip + Setup.exe → GitHub Release |
 
 ```powershell
-git tag v0.3.35
-git push origin v0.3.35
+git tag v0.3.36
+git push origin v0.3.36
 ```
 
 ## Клавиши

@@ -57,10 +57,10 @@ public static class IncyDeepLink
         host = host.ToLowerInvariant();
         path = path.Trim('/');
 
-        if (host is "crypt1")
+        if (host.StartsWith("crypt", StringComparison.OrdinalIgnoreCase))
         {
             if (!IncyCryptCodec.TryDecrypt(raw, out var decrypted))
-                throw new InvalidOperationException("Не удалось расшифровать incy://crypt1/.");
+                throw new InvalidOperationException("Не удалось расшифровать " + raw.Split('/')[0] + "//" + host + "/.");
             link = new IncyParsedLink
             {
                 Kind = IncyLinkKind.Crypt1,

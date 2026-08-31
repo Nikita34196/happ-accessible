@@ -19,6 +19,7 @@ public partial class MainWindow : Window
     private readonly SystemProxyService _proxy = new();
     private readonly CoreUpdateService _coreUpdates = new();
     private readonly AppUpdateCoordinator _appUpdates = new();
+    private readonly IncyCompatUpdateService _incyCompat = new();
     private readonly SessionHealthMonitor _healthMonitor = new();
     private readonly KillSwitchService _killSwitch = new();
     private readonly List<ServerProfile> _servers = [];
@@ -217,6 +218,35 @@ public partial class MainWindow : Window
 
         _ = CheckAndUpdateCoresOnStartupAsync();
         _ = CheckAndUpdateAppOnStartupAsync();
+        _ = RefreshIncyCompatAsync(force: false);
+    }
+
+    private async Task RefreshIncyCompatAsync(bool force)
+    {
+        try
+        {
+            if (force)
+                SetStatus("Обновление совместимости INCY…");
+            var notes = await _incyCompat.RefreshAsync(force);
+            if (force)
+            {
+                SetStatus(string.IsNullOrWhiteSpace(notes)
+                    ? "Совместимость INCY уже актуальна."
+                    : "Совместимость INCY обновлена: " + notes);
+            }
+        }
+        catch (Exception ex)
+        {
+            if (force)
+                SetStatus("Не удалось обновить совместимость INCY: " + ex.Message);
+            else
+                AppLogService.Error("INCY compat refresh on startup failed", ex);
+        }
+    }
+
+    private async void MenuRefreshIncyCompat_OnClick(object sender, RoutedEventArgs e)
+    {
+        await RefreshIncyCompatAsync(force: true);
     }
 
     private async Task CheckAndUpdateAppOnStartupAsync()
@@ -1317,9 +1347,9 @@ public partial class MainWindow : Window
                 SetStatus(CryptLinkHandler.ExplainLimitation());
                 return;
             }
-            if (IncyCryptCodec.IsCrypt1(input))
+            if (IncyCryptCodec.IsCryptLink(input))
             {
-                SetStatus("Не удалось расшифровать incy://crypt1/. Проверьте ссылку или вставьте открытый URL подписки.");
+                SetStatus("Не удалось расшифровать incy://crypt…/. Справка → Обновить совместимость INCY, либо вставьте открытый URL.");
                 return;
             }
 

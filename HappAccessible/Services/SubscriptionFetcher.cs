@@ -54,6 +54,7 @@ public sealed class SubscriptionFetcher
         if (settings.LastSuccessfulUserAgent is { } lastUa && IsOwnUserAgent(lastUa))
             agents.Add(lastUa.Trim());
         agents.Add(GetApplicationUserAgent());
+        agents.Add(IncyCompatStore.UserAgentOrFallback(IncyCompatibilityUserAgent));
         agents.Add(IncyCompatibilityUserAgent);
 
         Exception? lastError = null;

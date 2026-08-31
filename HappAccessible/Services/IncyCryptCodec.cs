@@ -5,38 +5,64 @@ using System.Text.Json;
 namespace HappAccessible.Services;
 
 /// <summary>
-/// Decodes <c>incy://crypt1/</c> using the published MIT encoder
+/// Decodes <c>incy://cryptN/</c> using the published MIT encoder
 /// (<see href="https://github.com/INCY-DEV/incy-link-encoder"/>).
-/// This is obfuscation, not secrecy: the same KDF ships in every INCY client.
+/// Built-in crypt1 stays; extra schemes come from <see cref="IncyCompatStore"/> auto-update.
 /// </summary>
 public static class IncyCryptCodec
 {
     public const string Prefix = "incy://crypt1/";
-    // SHA-256 of K1 from @incy/link-encoder (crypt1). When they add crypt2, keep this
-    // scheme and add a second key — old chat links must keep decoding.
     public const string KeyFingerprint =
         "b6bf708471cc90043232967660aade86a50b4e57929db2e53c5fa34db624c08c";
 
-    // 32-byte slices from official assets/incy_assets_{a,b}.bin (offsets 1024 and 2048).
-    // Refresh from https://github.com/INCY-DEV/incy-link-encoder if the fingerprint drifts.
     private static readonly byte[] KeymatASlice =
         Convert.FromHexString("ee876a063af704d7b409f1910d9731cc1419081ec08993a01270556873e1ef2d");
     private static readonly byte[] KeymatBSlice =
         Convert.FromHexString("cf510df43b2ab97ea98478eee5f1b1cf80e3a484fc9369316ccd87e54b7997b7");
 
-    private static readonly byte[] AesKey = DeriveKey();
+    private static readonly object Gate = new();
+    private static List<RuntimeScheme> _schemes = CreateBuiltIn();
 
-    public static bool IsCrypt1(string? text)
+    static IncyCryptCodec()
+    {
+        ReloadFromStore();
+    }
+
+    public static void ReloadFromStore()
+    {
+        var merged = CreateBuiltIn();
+        try
+        {
+            foreach (var s in IncyCompatStore.Load().Schemes)
+            {
+                if (!TryToRuntime(s, out var runtime))
+                    continue;
+                merged.RemoveAll(x => string.Equals(x.Host, runtime.Host, StringComparison.OrdinalIgnoreCase));
+                merged.Add(runtime);
+            }
+        }
+        catch
+        {
+            // keep built-in
+        }
+
+        lock (Gate)
+            _schemes = merged;
+    }
+
+    public static bool IsCryptLink(string? text)
     {
         if (string.IsNullOrWhiteSpace(text))
             return false;
-        return IndexOfCrypt1(text) >= 0;
+        return IndexOfCrypt(text) >= 0;
     }
+
+    public static bool IsCrypt1(string? text) => IsCryptLink(text);
 
     public static bool TryExtract(string text, out string link)
     {
         link = "";
-        var i = IndexOfCrypt1(text);
+        var i = IndexOfCrypt(text);
         if (i < 0)
             return false;
         var rest = text[i..];
@@ -44,66 +70,39 @@ public static class IncyCryptCodec
         while (end < rest.Length && !char.IsWhiteSpace(rest[end]) && rest[end] is not '<' and not '"' and not '\'')
             end++;
         link = rest[..end].TrimEnd('/', '>', '.', ',', ';');
-        return link.Length > Prefix.Length;
+        return link.Contains("://crypt", StringComparison.OrdinalIgnoreCase);
     }
 
     public static IncyCryptPayload Decrypt(string link)
     {
         if (!TryExtract(link, out var extracted))
-            throw new InvalidOperationException("Ожидалась ссылка incy://crypt1/…");
+            throw new InvalidOperationException("Ожидалась ссылка incy://crypt…/");
 
-        var payload = extracted[Prefix.Length..].TrimEnd('/');
-        if (payload.Length == 0)
-            throw new InvalidOperationException("Пустой payload incy://crypt1/.");
+        List<RuntimeScheme> schemes;
+        lock (Gate)
+            schemes = [.. _schemes];
 
-        byte[] wire;
-        try
-        {
-            wire = DecodeBase64Url(payload);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException("Некорректный base64url в incy://crypt1/.");
-        }
+        var matching = schemes.Where(s => extracted.StartsWith(s.Prefix, StringComparison.OrdinalIgnoreCase)).ToList();
+        var order = matching.Count > 0 ? matching.Concat(schemes.Except(matching)) : schemes;
 
-        const int ivLen = 12;
-        const int tagLen = 16;
-        if (wire.Length < ivLen + tagLen + 1)
-            throw new InvalidOperationException("Слишком короткий payload incy://crypt1/.");
-
-        var nonce = wire.AsSpan(0, ivLen);
-        var tag = wire.AsSpan(wire.Length - tagLen, tagLen);
-        var ciphertext = wire.AsSpan(ivLen, wire.Length - ivLen - tagLen);
-        var plaintext = new byte[ciphertext.Length];
-        try
+        InvalidOperationException? last = null;
+        foreach (var scheme in order)
         {
-            using var aes = new AesGcm(AesKey, tagLen);
-            aes.Decrypt(nonce, ciphertext, tag, plaintext);
-        }
-        catch (CryptographicException)
-        {
-            throw new InvalidOperationException(
-                "Не удалось расшифровать incy://crypt1/ (ссылка повреждена или это уже crypt2).");
+            if (!extracted.StartsWith(scheme.Prefix, StringComparison.OrdinalIgnoreCase)
+                && matching.Count > 0)
+                continue;
+            try
+            {
+                return DecryptWith(scheme, extracted);
+            }
+            catch (InvalidOperationException ex)
+            {
+                last = ex;
+            }
         }
 
-        JsonElement parsed;
-        try
-        {
-            parsed = JsonSerializer.Deserialize<JsonElement>(plaintext);
-        }
-        catch (JsonException)
-        {
-            throw new InvalidOperationException("incy://crypt1/ расшифровался, но внутри не JSON.");
-        }
-
-        if (!parsed.TryGetProperty("url", out var urlEl) || urlEl.GetString() is not { Length: > 0 } url)
-            throw new InvalidOperationException("В incy://crypt1/ нет поля url.");
-
-        string? name = null;
-        if (parsed.TryGetProperty("n", out var nameEl) && nameEl.GetString() is { Length: > 0 } n)
-            name = n;
-
-        return new IncyCryptPayload(url.Trim(), name);
+        throw last ?? new InvalidOperationException(
+            "Не удалось расшифровать incy://crypt…/ (ссылка повреждена или нужна новая схема — Справка → Обновить совместимость INCY).");
     }
 
     public static bool TryDecrypt(string text, out IncyCryptPayload payload)
@@ -120,10 +119,65 @@ public static class IncyCryptCodec
         }
     }
 
-    private static int IndexOfCrypt1(string text) =>
-        text.IndexOf(Prefix, StringComparison.OrdinalIgnoreCase);
+    private static IncyCryptPayload DecryptWith(RuntimeScheme scheme, string extracted)
+    {
+        var payload = extracted[scheme.Prefix.Length..].TrimEnd('/');
+        if (payload.Length == 0)
+            throw new InvalidOperationException("Пустой payload " + scheme.Prefix);
 
-    private static byte[] DeriveKey()
+        byte[] wire;
+        try
+        {
+            wire = DecodeBase64Url(payload);
+        }
+        catch (FormatException)
+        {
+            throw new InvalidOperationException("Некорректный base64url в " + scheme.Prefix);
+        }
+
+        const int ivLen = 12;
+        const int tagLen = 16;
+        if (wire.Length < ivLen + tagLen + 1)
+            throw new InvalidOperationException("Слишком короткий payload " + scheme.Prefix);
+
+        var plaintext = new byte[wire.Length - ivLen - tagLen];
+        try
+        {
+            using var aes = new AesGcm(scheme.Key, tagLen);
+            aes.Decrypt(wire.AsSpan(0, ivLen), wire.AsSpan(ivLen, plaintext.Length), wire.AsSpan(wire.Length - tagLen, tagLen), plaintext);
+        }
+        catch (CryptographicException)
+        {
+            throw new InvalidOperationException("Ключ " + scheme.Host + " не подошёл.");
+        }
+
+        JsonElement parsed;
+        try
+        {
+            parsed = JsonSerializer.Deserialize<JsonElement>(plaintext);
+        }
+        catch (JsonException)
+        {
+            throw new InvalidOperationException(scheme.Prefix + " расшифровался, но внутри не JSON.");
+        }
+
+        if (!parsed.TryGetProperty("url", out var urlEl) || urlEl.GetString() is not { Length: > 0 } url)
+            throw new InvalidOperationException("В " + scheme.Prefix + " нет поля url.");
+
+        string? name = null;
+        if (parsed.TryGetProperty("n", out var nameEl) && nameEl.GetString() is { Length: > 0 } n)
+            name = n;
+
+        return new IncyCryptPayload(url.Trim(), name);
+    }
+
+    private static int IndexOfCrypt(string text)
+    {
+        var i = text.IndexOf("incy://crypt", StringComparison.OrdinalIgnoreCase);
+        return i;
+    }
+
+    private static List<RuntimeScheme> CreateBuiltIn()
     {
         var salt = Encoding.UTF8.GetBytes("incy" + "deep" + "crypt1" + "v2026.06");
         var seed = new byte[salt.Length + KeymatASlice.Length + KeymatBSlice.Length];
@@ -133,12 +187,44 @@ public static class IncyCryptCodec
         var key = SHA256.HashData(seed);
         var fp = Convert.ToHexString(SHA256.HashData(key)).ToLowerInvariant();
         if (!string.Equals(fp, KeyFingerprint, StringComparison.Ordinal))
-            throw new InvalidOperationException("Отпечаток ключа incy crypt1 не совпал с опубликованным пакетом.");
+            throw new InvalidOperationException("Отпечаток встроенного ключа incy crypt1 не совпал.");
 
 #if DEBUG
         VerifyPinnedVector(key);
 #endif
-        return key;
+        return
+        [
+            new RuntimeScheme("crypt1", Prefix, key)
+        ];
+    }
+
+    private static bool TryToRuntime(IncyCryptScheme s, out RuntimeScheme runtime)
+    {
+        runtime = null!;
+        if (string.IsNullOrWhiteSpace(s.Host) || string.IsNullOrWhiteSpace(s.KeyHex))
+            return false;
+        try
+        {
+            var key = Convert.FromHexString(s.KeyHex.Trim());
+            if (key.Length != 32)
+                return false;
+            if (!string.IsNullOrWhiteSpace(s.Fingerprint))
+            {
+                var fp = Convert.ToHexString(SHA256.HashData(key)).ToLowerInvariant();
+                if (!string.Equals(fp, s.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                    return false;
+            }
+
+            var prefix = string.IsNullOrWhiteSpace(s.Prefix) ? "incy://" + s.Host + "/" : s.Prefix;
+            if (!prefix.EndsWith('/'))
+                prefix += "/";
+            runtime = new RuntimeScheme(s.Host.Trim(), prefix, key);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static void VerifyPinnedVector(byte[] key)
@@ -163,6 +249,8 @@ public static class IncyCryptCodec
             padded = padded.PadRight(padded.Length + pad, '=');
         return Convert.FromBase64String(padded);
     }
+
+    private sealed record RuntimeScheme(string Host, string Prefix, byte[] Key);
 }
 
 public readonly record struct IncyCryptPayload(string Url, string? Name);

@@ -240,6 +240,9 @@ public static class SingBoxConfigBuilder
         if (routing.Mode is RoutingMode.AppProxy or RoutingMode.AppBypass)
             route["find_process"] = true;
 
+        if (ruleSets is not null)
+            route["default_http_client"] = "hc-direct";
+
         var dataDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "HappAccessible", "data");
@@ -260,6 +263,10 @@ public static class SingBoxConfigBuilder
                     ["enabled"] = true,
                     ["path"] = Path.Combine(dataDir, "cache.db")
                 }
+            },
+            ["http_clients"] = new object[]
+            {
+                new Dictionary<string, object?> { ["tag"] = "hc-direct" }
             },
             ["dns"] = dns,
             ["inbounds"] = inbounds,
@@ -364,7 +371,6 @@ public static class SingBoxConfigBuilder
             ["type"] = "remote",
             ["format"] = "binary",
             ["url"] = url,
-            ["http_client"] = new Dictionary<string, object?> { ["detour"] = "direct" },
             ["update_interval"] = "24h"
         };
 
